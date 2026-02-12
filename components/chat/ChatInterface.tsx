@@ -163,7 +163,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
     };
 
     return (
-        <div className="flex flex-col h-[calc(100vh-10rem)] border rounded-xl overflow-hidden bg-background">
+        <div className="flex flex-col h-full bg-background">
             <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={scrollRef}>
                 {messages.length === 0 && (
                     <div className="flex h-full items-center justify-center text-muted-foreground opacity-50">

@@ -93,17 +93,6 @@ export function Sidebar({ isCollapsed, toggleCollapse }: SidebarProps) {
                         <ModeToggle />
                         {!isCollapsed && <span className="text-sm font-medium text-muted-foreground ml-2">Theme</span>}
                     </div>
-
-                    <button
-                        className={cn(
-                            "flex w-full items-center rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
-                            isCollapsed ? "justify-center px-2" : "px-3"
-                        )}
-                        title={isCollapsed ? "Sign Out" : undefined}
-                    >
-                        <LogOut className={cn("h-5 w-5", !isCollapsed && "mr-3")} />
-                        {!isCollapsed && "Sign Out"}
-                    </button>
                 </div>
             </div>
         </aside>
