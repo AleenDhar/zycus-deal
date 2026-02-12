@@ -2,11 +2,6 @@
 
 import { createProject } from "@/lib/actions/projects";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input"; // Wait, I didn't create Input.
-import { Textarea } from "@/components/ui/Textarea"; // Wait, I didn't create Textarea.
-// I will create simple manual input/textarea for now in the file or standalone components.
-import { Label } from "@/components/ui/Label"; // Wait, neither Label.
-
 import Link from "next/link";
 import { useFormStatus } from "react-dom";
 
