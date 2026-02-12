@@ -2,7 +2,7 @@
 
 import { createElement, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/Button";
-import { Send, User, Bot, Paperclip, File as FileIcon, Loader2 } from "lucide-react";
+import { Send, User, Bot, Paperclip, File as FileIcon, Loader2, Mic, MicOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 interface ChatProps {
@@ -16,8 +16,10 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const recognitionRef = useRef<any>(null);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -82,6 +84,48 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
+        }
+    };
+
+    // Initialize speech recognition
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                recognitionRef.current = new SpeechRecognition();
+                recognitionRef.current.continuous = false;
+                recognitionRef.current.interimResults = false;
+                recognitionRef.current.lang = 'en-US';
+
+                recognitionRef.current.onresult = (event: any) => {
+                    const transcript = event.results[0][0].transcript;
+                    setInput(prev => prev + (prev ? ' ' : '') + transcript);
+                };
+
+                recognitionRef.current.onerror = (event: any) => {
+                    console.error('Speech recognition error:', event.error);
+                    setIsRecording(false);
+                };
+
+                recognitionRef.current.onend = () => {
+                    setIsRecording(false);
+                };
+            }
+        }
+    }, []);
+
+    const toggleVoiceInput = () => {
+        if (!recognitionRef.current) {
+            alert('Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari.');
+            return;
+        }
+
+        if (isRecording) {
+            recognitionRef.current.stop();
+            setIsRecording(false);
+        } else {
+            recognitionRef.current.start();
+            setIsRecording(true);
         }
     };
 
@@ -155,9 +199,19 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
                 </Button>
 
+                <Button
+                    variant={isRecording ? "destructive" : "outline"}
+                    size="icon"
+                    onClick={toggleVoiceInput}
+                    disabled={loading}
+                    className={isRecording ? "animate-pulse" : ""}
+                >
+                    {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                </Button>
+
                 <input
                     className="flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="Type a message..."
+                    placeholder={isRecording ? "Listening..." : "Type a message..."}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
