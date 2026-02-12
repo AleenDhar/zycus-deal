@@ -92,24 +92,47 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         if (typeof window !== 'undefined') {
             const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
             if (SpeechRecognition) {
+                console.log('Speech recognition available');
                 recognitionRef.current = new SpeechRecognition();
-                recognitionRef.current.continuous = false;
-                recognitionRef.current.interimResults = false;
+                recognitionRef.current.continuous = true; // Keep recording until manually stopped
+                recognitionRef.current.interimResults = true; // Show results as you speak
                 recognitionRef.current.lang = 'en-US';
 
+                recognitionRef.current.onstart = () => {
+                    console.log('Speech recognition started');
+                };
+
                 recognitionRef.current.onresult = (event: any) => {
-                    const transcript = event.results[0][0].transcript;
-                    setInput(prev => prev + (prev ? ' ' : '') + transcript);
+                    let finalTranscript = '';
+                    let interimTranscript = '';
+
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        const transcript = event.results[i][0].transcript;
+                        if (event.results[i].isFinal) {
+                            finalTranscript += transcript + ' ';
+                        } else {
+                            interimTranscript += transcript;
+                        }
+                    }
+
+                    if (finalTranscript) {
+                        console.log('Final transcript:', finalTranscript);
+                        setInput(prev => prev + (prev ? ' ' : '') + finalTranscript.trim());
+                    }
                 };
 
                 recognitionRef.current.onerror = (event: any) => {
                     console.error('Speech recognition error:', event.error);
+                    alert(`Speech recognition error: ${event.error}`);
                     setIsRecording(false);
                 };
 
                 recognitionRef.current.onend = () => {
+                    console.log('Speech recognition ended');
                     setIsRecording(false);
                 };
+            } else {
+                console.error('Speech recognition not supported');
             }
         }
     }, []);
@@ -121,11 +144,18 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         }
 
         if (isRecording) {
+            console.log('Stopping recording');
             recognitionRef.current.stop();
             setIsRecording(false);
         } else {
-            recognitionRef.current.start();
-            setIsRecording(true);
+            console.log('Starting recording');
+            try {
+                recognitionRef.current.start();
+                setIsRecording(true);
+            } catch (error) {
+                console.error('Failed to start recognition:', error);
+                alert('Failed to start voice input. Please try again.');
+            }
         }
     };
 
