@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+export const runtime = 'edge'
+
 export async function middleware(request: NextRequest) {
     let supabaseResponse = NextResponse.next({
         request,
@@ -29,8 +31,8 @@ export async function middleware(request: NextRequest) {
         }
     )
 
-    // refresh session if expired - required for Server Components
-    await supabase.auth.getUser()
+    // refresh session if expired
+    const { data: { user } } = await supabase.auth.getUser()
 
     return supabaseResponse
 }
@@ -42,7 +44,8 @@ export const config = {
          * - _next/static (static files)
          * - _next/image (image optimization files)
          * - favicon.ico (favicon file)
+         * - api routes
          */
-        "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+        "/((?!_next/static|_next/image|favicon.ico|api/).*)",
     ],
 };
