@@ -8,7 +8,7 @@ export async function updateUserRole(userId: string, newRole: "admin" | "user") 
     const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', userId);
 
     if (error) {
-        return { error: error.message };
+        console.error("Update User Role Error:", error);
     }
 
     revalidatePath("/admin");
