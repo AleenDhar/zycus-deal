@@ -35,12 +35,7 @@ export function UploadDocument({ projectId }: { projectId: string }) {
             }
 
             // Call Server Action to save metadata
-            const formData = new FormData();
-            formData.append("projectId", projectId);
-            formData.append("name", file.name);
-            formData.append("filePath", filePath);
-
-            const response = await addDocument(formData);
+            const response = await addDocument(projectId, file.name, filePath);
             if (response?.error) {
                 throw new Error(response.error);
             }

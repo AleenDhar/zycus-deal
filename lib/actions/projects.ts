@@ -17,11 +17,10 @@ export async function createProject(formData: FormData) {
     const systemPrompt = formData.get("system_prompt") as string;
 
     if (!name) {
-        return { error: "Project name is required" };
+        console.error("Project name is required");
+        redirect("/projects/new");
+        return;
     }
-
-    // Check if profile exists; if not, create it (auth user might exist but profile trigger failed?)
-    // Actually trigger handles it. But we rely on 'owner_id' foreign key.
 
     const { error } = await supabase.from("projects").insert({
         name,
@@ -32,7 +31,8 @@ export async function createProject(formData: FormData) {
 
     if (error) {
         console.error("Create Project Error:", error);
-        return { error: error.message };
+        redirect("/projects/new");
+        return;
     }
 
     revalidatePath("/projects");
