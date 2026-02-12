@@ -10,6 +10,9 @@ import { ProjectFiles } from "@/components/projects/ProjectFiles";
 
 export const dynamic = "force-dynamic";
 
+import { getProjectMemories } from "@/lib/actions/memories";
+import { MemoryManager } from "@/components/projects/MemoryManager";
+
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
     const supabase = await createClient();
@@ -44,6 +47,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         .eq("project_id", id)
         .order("created_at", { ascending: false });
 
+    // Fetch memories
+    const memories = await getProjectMemories(id);
+
     return (
         <div className="flex flex-col gap-8">
             <div className="flex flex-col gap-2 border-b pb-6">
@@ -51,12 +57,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                     <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
                     <form action={async () => {
                         "use server";
+                        const { createNewChat } = await import("@/lib/actions/chat");
                         const { id: chatId } = await createNewChat(project.id);
                         if (chatId) {
-                            // Redirect is tricky in server action invoked this way without bind or proper handling. 
-                            // But createNewChat returns ID. We should use a client component or redirect inside server action.
-                            // The server action I wrote earlier returns {id}.
-                            // I'll update createChat to redirect as well or use redirect here.
                             const { redirect } = await import("next/navigation");
                             redirect(`/projects/${project.id}/chat/${chatId}`);
                         }
@@ -79,7 +82,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                         <div className="grid gap-3">
                             {chats.map((chat: { id: string; title: string; created_at: string }) => (
                                 <Link key={chat.id} href={`/projects/${project.id}/chat/${chat.id}`}>
-                                    <Card className="hover:bg-accent/50 transition-colors p-4">
+                                    <div className="border rounded-xl hover:bg-accent/50 transition-colors p-4 block">
                                         <div className="flex items-center justify-between">
                                             <div>
                                                 <h3 className="font-medium">{chat.title}</h3>
@@ -89,7 +92,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                                             </div>
                                             <MessageSquarePlus className="h-4 w-4 text-muted-foreground" />
                                         </div>
-                                    </Card>
+                                    </div>
                                 </Link>
                             ))}
                         </div>
@@ -106,6 +109,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
                 <div className="space-y-6">
                     <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} />
+                    <MemoryManager projectId={project.id} memories={memories} />
                 </div>
             </div>
         </div>

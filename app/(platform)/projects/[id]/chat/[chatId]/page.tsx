@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import { ChatInterface } from "@/components/chat/ChatInterface";
+import { MemoryManager } from "@/components/projects/MemoryManager";
+import { getProjectMemories } from "@/lib/actions/memories";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +24,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
 
     if (!project) notFound();
 
-    // Verify chat access and fetch history
+    // Verify chat access
     const { data: chat } = await supabase
         .from("chats")
         .select("*")
@@ -32,11 +34,15 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
 
     if (!chat) notFound();
 
+    // Fetch messages
     const { data: messages } = await supabase
         .from("chat_messages")
         .select("*")
         .eq("chat_id", chatId)
         .order("created_at", { ascending: true });
+
+    // Fetch memories
+    const memories = await getProjectMemories(projectId);
 
     return (
         <div className="flex flex-col h-full gap-4">
@@ -47,11 +53,22 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
                 </div>
             </div>
 
-            <ChatInterface
-                projectId={projectId}
-                chatId={chatId}
-                initialMessages={messages || []}
-            />
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-full">
+                <div className="lg:col-span-3 h-full">
+                    <ChatInterface
+                        projectId={projectId}
+                        chatId={chatId}
+                        initialMessages={messages || []}
+                    />
+                </div>
+                <div className="space-y-6 h-full overflow-y-auto pr-2">
+                    <MemoryManager
+                        projectId={projectId}
+                        chatId={chatId}
+                        memories={memories}
+                    />
+                </div>
+            </div>
         </div>
     );
 }

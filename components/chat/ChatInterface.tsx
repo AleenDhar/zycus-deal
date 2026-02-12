@@ -4,6 +4,9 @@ import { createElement, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/Button";
 import { Send, User, Bot, Paperclip, File as FileIcon, Loader2, Mic, MicOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ChartRenderer } from "@/components/chat/ChartRenderer";
 
 interface ChatProps {
     projectId: string;
@@ -174,22 +177,73 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                 <Bot className="h-5 w-5" />
                             </div>
                         )}
-                        <div className={`rounded-lg p-3 max-w-[80%] text-sm whitespace-pre-wrap ${msg.role === 'user'
+                        <div className={`rounded-lg p-3 max-w-[80%] text-sm overflow-hidden ${msg.role === 'user'
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-muted-foreground'
                             }`}>
-                            {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
-                                const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
-                                if (match) {
-                                    return (
-                                        <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline text-blue-500 hover:text-blue-700 flex items-center gap-1">
-                                            <FileIcon className="h-4 w-4" />
-                                            {match[1]}
-                                        </a>
-                                    );
-                                }
-                                return part;
-                            })}
+                            {msg.role === 'user' ? (
+                                // For user messages, keep simple text rendering to avoid markdown parsing of simple inputs if preferred, 
+                                // but markdown for user input is also fine. Let's stick to simple text for user to match typical chat apps, 
+                                // or minimal markdown. 
+                                // Actually, simpler:
+                                <div className="whitespace-pre-wrap">
+                                    {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
+                                        const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
+                                        if (match) {
+                                            return (
+                                                <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 flex items-center gap-1">
+                                                    <FileIcon className="h-4 w-4" />
+                                                    {match[1]}
+                                                </a>
+                                            );
+                                        }
+                                        return part;
+                                    })}
+                                </div>
+                            ) : (
+                                // For assistant messages, use ReactMarkdown
+                                <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={{
+                                        // Text Structure
+                                        h1: ({ node, ...props }: any) => <h1 className="text-2xl font-bold mt-6 mb-4 pb-2 border-b border-border/50" {...props} />,
+                                        h2: ({ node, ...props }: any) => <h2 className="text-xl font-semibold mt-5 mb-3 text-foreground/90" {...props} />,
+                                        h3: ({ node, ...props }: any) => <h3 className="text-lg font-medium mt-4 mb-2 text-foreground/80" {...props} />,
+                                        p: ({ node, ...props }: any) => <p className="leading-7 [&:not(:first-child)]:mt-4 text-base" {...props} />,
+                                        ul: ({ node, ...props }: any) => <ul className="my-4 ml-6 list-disc [&>li]:mt-2" {...props} />,
+                                        ol: ({ node, ...props }: any) => <ol className="my-4 ml-6 list-decimal [&>li]:mt-2" {...props} />,
+                                        li: ({ node, ...props }: any) => <li className="leading-7" {...props} />,
+                                        blockquote: ({ node, ...props }: any) => <blockquote className="mt-6 border-l-2 border-primary pl-6 italic text-muted-foreground" {...props} />,
+
+                                        // Tables
+                                        table: ({ node, ...props }: any) => (
+                                            <div className="overflow-x-auto my-6 rounded-lg border bg-card shadow-sm">
+                                                <table className="w-full text-sm" {...props} />
+                                            </div>
+                                        ),
+                                        thead: ({ node, ...props }: any) => <thead className="bg-muted/50 text-muted-foreground font-medium" {...props} />,
+                                        tr: ({ node, ...props }: any) => <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted" {...props} />,
+                                        th: ({ node, ...props }: any) => <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0" {...props} />,
+                                        td: ({ node, ...props }: any) => <td className="p-4 align-middle [&:has([role=checkbox])]:pr-0" {...props} />,
+
+                                        // Links & Code
+                                        a: ({ node, ...props }: any) => <a className="font-medium underline underline-offset-4 decoration-primary text-primary hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
+                                        code: ({ node, ...props }: any) => {
+                                            const match = /language-(\w+)/.exec((props.className || ''))
+                                            if (match && match[1] === 'chart') {
+                                                return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
+                                            }
+                                            return !match ? (
+                                                <code className="bg-background/20 rounded px-1" {...props} />
+                                            ) : (
+                                                <code className="block bg-background/20 p-2 rounded my-2 whitespace-pre-wrap overflow-x-auto" {...props} />
+                                            )
+                                        }
+                                    }}
+                                >
+                                    {msg.content}
+                                </ReactMarkdown>
+                            )}
                         </div>
                         {msg.role === 'user' && (
                             <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center shadow-sm flex-shrink-0">

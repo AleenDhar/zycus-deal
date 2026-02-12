@@ -38,14 +38,40 @@ export async function sendMessage(projectId: string, chatId: string, content: st
         content: content
     });
 
-    // Get System Prompt
+    // Get Global Base Prompt
+    const { data: basePromptData } = await supabase
+        .from("app_config")
+        .select("value")
+        .eq("key", "agent_base_prompt")
+        .single();
+
+    const basePrompt = basePromptData?.value || "You are a helpful AI assistant.";
+
+    // Get Project System Prompt
     const { data: project } = await supabase
         .from("projects")
         .select("system_prompt")
         .eq("id", projectId)
         .single();
 
-    const systemPrompt = project?.system_prompt || "You are a helpful AI assistant.";
+    let systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
+
+    // Get project memories for context
+    const { data: memories } = await supabase
+        .from("project_memories")
+        .select("memory_type, content, sentiment, importance")
+        .eq("project_id", projectId)
+        .order("importance", { ascending: false })
+        .limit(10);
+
+    // Add memories to system prompt if they exist
+    if (memories && memories.length > 0) {
+        const memoryContext = memories.map(m =>
+            `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
+        ).join("\n");
+
+        systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
+    }
 
     // Construct Payload
     const messagesPayload = previousMessages.map(m => ({
