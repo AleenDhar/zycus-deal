@@ -19,10 +19,46 @@ export default async function ProjectsPage() {
         projects = data || [];
     }
 
+    const myProjects = projects.filter((p: any) => p.owner_id === user?.id);
+    const sharedProjects = projects.filter((p: any) => p.owner_id !== user?.id);
+
+    const ProjectCard = ({ project }: { project: any }) => (
+        <Link key={project.id} href={`/projects/${project.id}`}>
+            <Card className="h-full transition-all hover:border-primary hover:shadow-md cursor-pointer">
+                <CardHeader>
+                    <div className="flex justify-between items-start">
+                        <CardTitle className="line-clamp-1">{project.name}</CardTitle>
+                        {project.visibility === 'public' && (
+                            <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-full whitespace-nowrap ml-2">
+                                Public
+                            </span>
+                        )}
+                    </div>
+                    <CardDescription className="line-clamp-2">
+                        {project.description || "No description provided."}
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>
+                            {new Date(project.created_at).toLocaleDateString()}
+                        </span>
+                        <span className="capitalize px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground font-medium">
+                            {project.status}
+                        </span>
+                    </div>
+                </CardContent>
+            </Card>
+        </Link>
+    );
+
     return (
-        <div className="flex flex-col gap-6">
-            <div className="flex items-center justify-between">
-                <h1 className="text-3xl font-bold tracking-tight">Projects</h1>
+        <div className="flex flex-col gap-10">
+            <div className="flex items-center justify-between border-b pb-6">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Projects</h1>
+                    <p className="text-muted-foreground mt-1">Manage your deals and explore public insights.</p>
+                </div>
                 <Button asChild>
                     <Link href="/projects/new">
                         <FolderPlus className="mr-2 h-4 w-4" />
@@ -31,47 +67,43 @@ export default async function ProjectsPage() {
                 </Button>
             </div>
 
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                {projects.length === 0 ? (
-                    <Card className="col-span-full border-dashed">
-                        <CardHeader className="text-center">
-                            <CardTitle>No Projects Found</CardTitle>
-                            <CardDescription>
-                                Get started by creating your first deal project.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="flex justify-center pb-6">
-                            <Button variant="outline" asChild>
-                                <Link href="/projects/new">
-                                    Create Project
-                                </Link>
+            <div className="space-y-6">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                    <FolderPlus className="h-5 w-5 text-primary" />
+                    My Projects
+                </h2>
+                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                    {myProjects.length === 0 ? (
+                        <div className="col-span-full py-12 text-center border rounded-xl bg-muted/20 border-dashed">
+                            <p className="text-muted-foreground">You haven't created any projects yet.</p>
+                            <Button variant="link" asChild className="mt-2">
+                                <Link href="/projects/new">Create one now</Link>
                             </Button>
-                        </CardContent>
-                    </Card>
-                ) : (
-                    projects.map((project) => (
-                        <Link key={project.id} href={`/projects/${project.id}`}>
-                            <Card className="h-full transition-all hover:border-primary hover:shadow-md cursor-pointer">
-                                <CardHeader>
-                                    <CardTitle>{project.name}</CardTitle>
-                                    <CardDescription className="line-clamp-2">
-                                        {project.description || "No description provided."}
-                                    </CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                        <span>
-                                            {new Date(project.created_at).toLocaleDateString()}
-                                        </span>
-                                        <span className="capitalize px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground font-medium">
-                                            {project.status}
-                                        </span>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </Link>
-                    ))
-                )}
+                        </div>
+                    ) : (
+                        myProjects.map((project: any) => (
+                            <ProjectCard key={project.id} project={project} />
+                        ))
+                    )}
+                </div>
+            </div>
+
+            <div className="space-y-6">
+                <h2 className="text-xl font-semibold flex items-center gap-2 border-t pt-8">
+                    <FolderPlus className="h-5 w-5 text-secondary-foreground" />
+                    Discover Public Projects
+                </h2>
+                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                    {sharedProjects.length === 0 ? (
+                        <div className="col-span-full py-8 text-center text-muted-foreground text-sm italic">
+                            No public projects available to explore right now.
+                        </div>
+                    ) : (
+                        sharedProjects.map((project: any) => (
+                            <ProjectCard key={project.id} project={project} />
+                        ))
+                    )}
+                </div>
             </div>
         </div>
     );

@@ -179,7 +179,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         )}
                         <div className={`rounded-lg p-3 max-w-[80%] text-sm overflow-hidden ${msg.role === 'user'
                             ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted text-muted-foreground'
+                            : 'bg-muted text-foreground'
                             }`}>
                             {msg.role === 'user' ? (
                                 // For user messages, keep simple text rendering to avoid markdown parsing of simple inputs if preferred, 

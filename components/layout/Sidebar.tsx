@@ -10,8 +10,12 @@ import {
     ShieldCheck,
     BarChart,
     LogOut,
+    PanelLeftClose,
+    PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/Button";
+import { ModeToggle } from "@/components/ModeToggle";
 
 const menuItems = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -22,21 +26,44 @@ const menuItems = [
     { name: "Settings", href: "/settings", icon: Settings },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+    isCollapsed: boolean;
+    toggleCollapse: () => void;
+}
+
+export function Sidebar({ isCollapsed, toggleCollapse }: SidebarProps) {
     const pathname = usePathname();
 
     return (
-        <aside className="fixed left-0 top-0 z-40 h-screen w-64 border-r bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <aside
+            className={cn(
+                "fixed left-0 top-0 z-40 h-screen border-r bg-background/95 backdrop-blur transition-all duration-300 supports-[backdrop-filter]:bg-background/60",
+                isCollapsed ? "w-16" : "w-64"
+            )}
+        >
             <div className="flex h-full flex-col px-3 py-4">
-                <div className="mb-10 flex items-center px-2">
-                    <div className="mr-3 flex h-8 w-8 items-center justify-center rounded bg-primary text-primary-foreground">
-                        <BarChart className="h-5 w-5" />
+                {/* Header / Logo */}
+                <div className={cn("mb-6 flex items-center justify-between", isCollapsed ? "justify-center px-0" : "px-2")}>
+                    <div className="flex items-center">
+                        <div className="flex h-8 w-8 items-center justify-center rounded bg-primary text-primary-foreground">
+                            <BarChart className="h-5 w-5" />
+                        </div>
+                        {!isCollapsed && (
+                            <span className="ml-3 text-xl font-bold tracking-tight text-foreground whitespace-nowrap">
+                                Deal Intel
+                            </span>
+                        )}
                     </div>
-                    <span className="text-xl font-bold tracking-tight text-foreground">
-                        Deal Intel
-                    </span>
                 </div>
 
+                {/* Toggle Button (moved to top-right of sidebar if expanded, or centered if collapsed) */}
+                <div className={cn("mb-4 flex", isCollapsed ? "justify-center" : "justify-end px-2")}>
+                    <Button variant="ghost" size="icon" onClick={toggleCollapse} title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}>
+                        {isCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+                    </Button>
+                </div>
+
+                {/* Navigation */}
                 <nav className="flex-1 space-y-1">
                     {menuItems.map((item) => {
                         const isActive = pathname.startsWith(item.href);
@@ -45,23 +72,37 @@ export function Sidebar() {
                                 key={item.href}
                                 href={item.href}
                                 className={cn(
-                                    "flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                                    "flex items-center rounded-lg py-2 text-sm font-medium transition-colors",
+                                    isCollapsed ? "justify-center px-2" : "px-3",
                                     isActive
                                         ? "bg-primary text-primary-foreground shadow-sm"
                                         : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                                 )}
+                                title={isCollapsed ? item.name : undefined}
                             >
-                                <item.icon className="mr-3 h-5 w-5 flex-shrink-0" />
-                                {item.name}
+                                <item.icon className={cn("h-5 w-5 flex-shrink-0", !isCollapsed && "mr-3")} />
+                                {!isCollapsed && <span>{item.name}</span>}
                             </Link>
                         );
                     })}
                 </nav>
 
-                <div className="mt-auto border-t pt-4">
-                    <button className="flex w-full items-center rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive">
-                        <LogOut className="mr-3 h-5 w-5" />
-                        Sign Out
+                {/* Footer Actions */}
+                <div className="mt-auto border-t pt-4 space-y-2">
+                    <div className={cn("flex items-center", isCollapsed ? "justify-center" : "px-3 justify-between")}>
+                        <ModeToggle />
+                        {!isCollapsed && <span className="text-sm font-medium text-muted-foreground ml-2">Theme</span>}
+                    </div>
+
+                    <button
+                        className={cn(
+                            "flex w-full items-center rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
+                            isCollapsed ? "justify-center px-2" : "px-3"
+                        )}
+                        title={isCollapsed ? "Sign Out" : undefined}
+                    >
+                        <LogOut className={cn("h-5 w-5", !isCollapsed && "mr-3")} />
+                        {!isCollapsed && "Sign Out"}
                     </button>
                 </div>
             </div>

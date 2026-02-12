@@ -13,6 +13,8 @@ export const dynamic = "force-dynamic";
 import { getProjectMemories } from "@/lib/actions/memories";
 import { MemoryManager } from "@/components/projects/MemoryManager";
 
+import { VisibilityToggle } from "@/components/projects/VisibilityToggle";
+
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
     const supabase = await createClient();
@@ -33,11 +35,16 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         notFound();
     }
 
+    const isOwner = project.owner_id === user.id;
+
     // Fetch active chats for this project
     const { data: chats } = await supabase
         .from("chats")
         .select("*")
         .eq("project_id", id)
+        // Only show my chats if not owner, or all chats if owner? 
+        // Actually, adhering to "User sees OWN chats" policy from DB migration
+        .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
     // Fetch documents
@@ -54,7 +61,14 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         <div className="flex flex-col gap-8">
             <div className="flex flex-col gap-2 border-b pb-6">
                 <div className="flex items-center justify-between">
-                    <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
+                    <div className="flex items-center gap-4">
+                        <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
+                        <VisibilityToggle
+                            projectId={project.id}
+                            initialVisibility={project.visibility || 'private'}
+                            canEdit={isOwner}
+                        />
+                    </div>
                     <form action={async () => {
                         "use server";
                         const { createNewChat } = await import("@/lib/actions/chat");
