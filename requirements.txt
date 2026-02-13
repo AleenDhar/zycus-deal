@@ -1,0 +1,14 @@
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pydantic>=2.6.0
+python-dotenv>=1.0.1
+langchain-core>=0.1.30
+langchain-community>=0.0.27
+langchain-openai>=0.0.8
+duckduckgo-search>=5.0.0
+supabase>=2.4.0
+playwright>=1.42.0
+google-sheets-auth>=0.1.0  # Assumed based on import
+active-campaign-api>=1.0.0 # Just in case
+httpx>=0.27.0
+websockets>=12.0

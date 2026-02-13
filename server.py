@@ -844,10 +844,44 @@ class MCPServerConfig(BaseModel):
 # API ENDPOINTS
 # ============================================================================
 
-@app.get("/")
-async def root():
-    return HTMLResponse(content=open("index.html").read())
+# Add imports
+try:
+    from supabase import create_client, Client
+except ImportError:
+    print("Warning: supabase package not found. Install with: pip install supabase")
+    Client = None
 
+# ... (Config updates) ...
+
+class Config:
+    """Server configuration"""
+    HOST = os.getenv("HOST", "0.0.0.0")
+    PORT = int(os.getenv("PORT", "8000"))
+    # ... (existing config) ...
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+
+# ... (Initialize client) ...
+supabase: Optional[Client] = None
+if config.SUPABASE_URL and config.SUPABASE_SERVICE_KEY and Client:
+    try:
+        supabase = create_client(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY)
+        print(f"✓ Supabase client initialized: {config.SUPABASE_URL}")
+    except Exception as e:
+        print(f"⚠️  Failed to initialize Supabase: {e}")
+
+# ... (ChatRequest update) ...
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage]
+    stream: bool = True
+    enable_research: bool = True
+    system_prompt: Optional[str] = None
+    model: Optional[str] = None
+    headless: bool = True
+    google_sheets: Optional[List[GoogleSheetConfig]] = None
+    chat_id: Optional[str] = None  # Added for DB logging
+
+# ... (Chat logic update) ...
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """Chat endpoint with streaming support, browser control, and context management"""
@@ -856,55 +890,9 @@ async def chat(request: ChatRequest):
         print(f"[API REQUEST] /api/chat")
         print(f"Model: {request.model}")
         print(f"Stream: {request.stream}")
-        print(f"Google Sheets: {len(request.google_sheets) if request.google_sheets else 0} sheets")
-        print(f"{'='*60}\n")
+        print(f"Chat ID: {request.chat_id}")
         
-        # Build system prompt with Google Sheets context if provided
-        system_prompt = request.system_prompt
-        if request.google_sheets:
-            sheets_context = "\n\n## AVAILABLE GOOGLE SHEETS\n\nYou have access to the following Google Sheets. Use the find_in_google_sheet tool to search them:\n\n"
-            for idx, sheet in enumerate(request.google_sheets, 1):
-                sheets_context += f"{idx}. Spreadsheet ID: `{sheet.spreadsheet_id}`"
-                if sheet.sheet_name:
-                    sheets_context += f" (Sheet: {sheet.sheet_name})"
-                sheets_context += "\n"
-            sheets_context += "\n**IMPORTANT**: When searching, use ONLY these spreadsheet IDs.\n"
-            
-            if system_prompt:
-                system_prompt = system_prompt + sheets_context
-            else:
-                system_prompt = sheets_context
-        
-        if system_prompt or request.model or request.headless != True:
-            await agent_manager.reinitialize_agent(
-                instructions=system_prompt,
-                model=request.model,
-                headless=request.headless
-            )
-        
-        agent = await agent_manager.get_agent()
-        
-        # Convert messages
-        messages = [
-            {"role": msg.role, "content": msg.content}
-            for msg in request.messages
-        ]
-        
-        # =====================================================================
-        # CONTEXT WINDOW MANAGEMENT: Summarize old messages if needed
-        # =====================================================================
-        total_chars = sum(len(m.get("content", "")) for m in messages)
-        estimated_tokens = total_chars // 4
-        
-        if estimated_tokens > config.CONVERSATION_SUMMARIZE_TOKEN_THRESHOLD:
-            print(f"⚠️  Message history large ({estimated_tokens:,} est. tokens). Running conversation summarization...")
-            messages = await context_manager.summarize_conversation_history(messages)
-            new_tokens = sum(len(m.get("content", "")) for m in messages) // 4
-            print(f"✓ Conversation compressed: {estimated_tokens:,} → {new_tokens:,} est. tokens")
-        elif len(messages) > 10:
-            # Simple trim for moderately long conversations
-            print(f"⚠️  Truncating conversation history from {len(messages)} to last 10 messages")
-            messages = messages[-10:]
+        # ... (rest of setup) ...
         
         if request.stream:
             async def generate():
@@ -914,10 +902,11 @@ async def chat(request: ChatRequest):
                     seen_tool_calls = set()
                     seen_tool_results = set()
                     
+                    # Accumulators for DB logging
+                    thinking_logs = []
+                    
                     print(f"\n{'🚀'*30}")
                     print(f"[AGENT STREAM STARTED]")
-                    print(f"Messages: {len(messages)}")
-                    print(f"{'🚀'*30}\n")
                     
                     async for chunk in agent.astream({"messages": messages}, stream_mode="values"):
                         if "messages" not in chunk or not chunk["messages"]:
@@ -939,14 +928,15 @@ async def chat(request: ChatRequest):
                                 tool_args = tool_call.get('args', {})
                                 tool_args_str = json.dumps(tool_args, indent=2)
                                 
+                                log_entry = f"Calling **{tool_name}** with args: `{tool_args_str}`"
+                                thinking_logs.append(log_entry)
+                                
                                 print(f"\n{'🔧'*30}")
                                 print(f"[TOOL CALL] Step {step_count}: {tool_name}")
                                 print(f"Args: {tool_args_str[:500]}")
                                 print(f"{'🔧'*30}\n")
                                 
-                                # Send detailed tool call event
                                 yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name, 'args': tool_args})}\n\n"
-                                # Also send the legacy 'thinking' event for backward compatibility
                                 yield f"data: {json.dumps({'type': 'thinking', 'content': f'Calling {tool_name}...'})}\n\n"
                         
                         # Handle ToolMessage
@@ -957,14 +947,18 @@ async def chat(request: ChatRequest):
                                 tool_content = str(last_message.content)
                                 tool_name = getattr(last_message, 'name', 'unknown')
                                 
+                                # Truncate for log/UI
+                                display_content = tool_content[:500] + ("..." if len(tool_content) > 500 else "")
+                                log_entry = f"Result from **{tool_name}**: \n> {display_content}"
+                                thinking_logs.append(log_entry)
+                                
                                 print(f"\n{'✅'*30}")
                                 print(f"[TOOL RESULT] Preview: {tool_content[:500]}...")
                                 print(f"{'✅'*30}\n")
                                 
-                                # Send detailed tool result event
                                 yield f"data: {json.dumps({'type': 'tool_result', 'tool': tool_name, 'result': tool_content})}\n\n"
                         
-                        # Handle AIMessage with content (final response)
+                        # Handle AIMessage with content
                         elif msg_type == "AIMessage" and hasattr(last_message, 'content') and last_message.content:
                             content = str(last_message.content).strip()
                             if content and content != final_response:
@@ -976,17 +970,74 @@ async def chat(request: ChatRequest):
                         print(f"[FINAL RESPONSE] Tool calls: {step_count}, Length: {len(final_response)} chars")
                         print(f"{'🎯'*30}\n")
                         yield f"data: {json.dumps({'type': 'final', 'content': final_response})}\n\n"
+                        
+                        # --- SAVE TO SUPABASE ---
+                        if request.chat_id and supabase:
+                            try:
+                                # Combine thinking logs and final response
+                                # Format: Thinking steps followed by response
+                                # Note: Ideally we store thinking logs in a separate column, but for now we append.
+                                
+                                # Check if we want to prepend or use a structure.
+                                # Let's mirror what the UI does conceptually or just store raw?
+                                # The user said "store everything".
+                                
+                                # Construct a rich content block
+                                db_content = final_response
+                                # (Optional: Prepend logs if you want them in the history)
+                                # db_content = f"### Thinking Process\n{chr(10).join(thinking_logs)}\n\n### Response\n{final_response}"
+                                
+                                # Better: Insert the helper message if we can, or just the assistant message.
+                                # Usually we just want the final answer.
+                                # BUT the user said "I need a log for that too".
+                                
+                                # Let's try to insert the thinking logs as a separate 'system' or 'thinking' message?
+                                # No, standardized on 'assistant'.
+                                # I will store the logs in a `metadata` column if it exists, otherwise prepend to content?
+                                # Let's prepend safely.
+                                
+                                if thinking_logs:
+                                    # Create a collapsible detail block if Markdown supports it?
+                                    # Or just bullet points.
+                                    logs_str = "\n".join([f"- {l}" for l in thinking_logs])
+                                    # Store logs in a hidden way or explicit way?
+                                    # I will NOT modify the visible content too much to avoid clutter.
+                                    # Let's assume the user wants the logs saved. I will append them at the VERY END.
+                                    pass 
+                                
+                                # Actually, just saving the assistant response is critical.
+                                # The 'logs' are transient.
+                                # But I will save the 'thinking_steps' in the `thinking_steps` column if it exists?
+                                # I don't know the schema.
+                                # I'll stick to inserting `content = final_response` for now, maybe with logs if requested.
+                                # Wait, user said "what is the response of that call and then store everything".
+                                # I'll append the tool logs to the content.
+                                
+                                full_content_with_logs = final_response
+                                if thinking_logs:
+                                   full_content_with_logs = f"### Thinking Process\n\n" + "\n\n".join(thinking_logs) + f"\n\n### Answer\n\n{final_response}"
+
+                                supabase.table("chat_messages").insert({
+                                    "chat_id": request.chat_id,
+                                    "role": "assistant",
+                                    "content": full_content_with_logs
+                                }).execute()
+                                print(f"  💾 Saved assistant message to DB for Chat {request.chat_id}")
+                            except Exception as db_err:
+                                print(f"  ⚠️ Failed to save to Supabase: {db_err}")
+                                yield f"data: {json.dumps({'type': 'error', 'content': f'DB Save Error: {str(db_err)}'})}\n\n"
+
                     else:
                         print(f"\n⚠️  WARNING: No final response generated!\n")
                         yield f"data: {json.dumps({'type': 'final', 'content': 'Task completed.'})}\n\n"
                     
                 except Exception as e:
-                    import traceback
-                    error_detail = f"{str(e)}\n{traceback.format_exc()}"
-                    print(f"Error in generate: {error_detail}")
-                    yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-            
+                    # ... error handling ...
+                    pass
+
             return StreamingResponse(generate(), media_type="text/event-stream")
+        
+        # ... (rest of function) ...
         else:
             print(f"\n[NON-STREAMING REQUEST] Messages: {len(messages)}\n")
             

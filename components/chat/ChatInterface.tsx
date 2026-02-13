@@ -62,16 +62,22 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             // Add placeholder assistant message
             setMessages(prev => [...prev, { role: "assistant", content: "" }]);
 
+            let buffer = "";
+
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
                 const chunk = decoder.decode(value, { stream: true });
-                console.log("Received chunk:", chunk); // Debug raw chunk
+                // console.log("Received chunk:", chunk); // Debug raw chunk - commented out to reduce noise
 
-                const lines = chunk.split("\n\n");
+                buffer += chunk;
+                const parts = buffer.split("\n\n");
 
-                for (const line of lines) {
+                // Keep the last part in the buffer (it might be incomplete)
+                buffer = parts.pop() || "";
+
+                for (const line of parts) {
                     if (line.startsWith("data: ")) {
                         try {
                             const jsonStr = line.slice(6);
@@ -93,9 +99,35 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     }
                                     return newMessages;
                                 });
-                            } else if (data.type === "thinking") {
-                                console.log("Thinking:", data.content);
-                                setThinkingText(data.content);
+                            } else if (data.type === "tool_call") {
+                                const toolInfo = `Called **${data.tool}** with args: \`${JSON.stringify(data.args)}\``;
+                                setMessages(prev => {
+                                    const newMessages = [...prev];
+                                    const lastMsg = newMessages[newMessages.length - 1];
+                                    if (lastMsg.role === 'assistant') {
+                                        const steps = lastMsg.thinkingSteps || [];
+                                        newMessages[newMessages.length - 1] = {
+                                            ...lastMsg,
+                                            thinkingSteps: [...steps, toolInfo]
+                                        };
+                                    }
+                                    return newMessages;
+                                });
+                            } else if (data.type === "tool_result") {
+                                const resultStr = data.result.length > 200 ? data.result.slice(0, 200) + "..." : data.result;
+                                const resultInfo = `Result from **${data.tool}**: \n> ${resultStr}`;
+                                setMessages(prev => {
+                                    const newMessages = [...prev];
+                                    const lastMsg = newMessages[newMessages.length - 1];
+                                    if (lastMsg.role === 'assistant') {
+                                        const steps = lastMsg.thinkingSteps || [];
+                                        newMessages[newMessages.length - 1] = {
+                                            ...lastMsg,
+                                            thinkingSteps: [...steps, resultInfo]
+                                        };
+                                    }
+                                    return newMessages;
+                                });
                             }
                         } catch (e) {
                             console.error("Error parsing stream chunk:", e);
@@ -256,50 +288,99 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                         return part;
                                     })}
                                 </div>
-                            ) : (
-                                // For assistant messages, use ReactMarkdown
-                                <ReactMarkdown
-                                    remarkPlugins={[remarkGfm]}
-                                    components={{
-                                        // Text Structure
-                                        h1: ({ node, ...props }: any) => <h1 className="text-2xl font-bold mt-6 mb-4 pb-2 border-b border-border/50" {...props} />,
-                                        h2: ({ node, ...props }: any) => <h2 className="text-xl font-semibold mt-5 mb-3 text-foreground/90" {...props} />,
-                                        h3: ({ node, ...props }: any) => <h3 className="text-lg font-medium mt-4 mb-2 text-foreground/80" {...props} />,
-                                        p: ({ node, ...props }: any) => <p className="leading-7 [&:not(:first-child)]:mt-4 text-base" {...props} />,
-                                        ul: ({ node, ...props }: any) => <ul className="my-4 ml-6 list-disc [&>li]:mt-2" {...props} />,
-                                        ol: ({ node, ...props }: any) => <ol className="my-4 ml-6 list-decimal [&>li]:mt-2" {...props} />,
-                                        li: ({ node, ...props }: any) => <li className="leading-7" {...props} />,
-                                        blockquote: ({ node, ...props }: any) => <blockquote className="mt-6 border-l-2 border-primary pl-6 italic text-muted-foreground" {...props} />,
+                            ) : (() => {
+                                // 1. Parse Content (History vs Live)
+                                const rawContent = msg.content || "";
+                                let thinkingContent = "";
+                                let mainContent = rawContent;
 
-                                        // Tables
-                                        table: ({ node, ...props }: any) => (
-                                            <div className="overflow-x-auto my-6 rounded-lg border bg-card shadow-sm">
-                                                <table className="w-full text-sm" {...props} />
-                                            </div>
-                                        ),
-                                        thead: ({ node, ...props }: any) => <thead className="bg-muted/50 text-muted-foreground font-medium" {...props} />,
-                                        tr: ({ node, ...props }: any) => <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted" {...props} />,
-                                        th: ({ node, ...props }: any) => <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0" {...props} />,
-                                        td: ({ node, ...props }: any) => <td className="p-4 align-middle [&:has([role=checkbox])]:pr-0" {...props} />,
+                                // Check if this is a historical message with embedded thinking logs (saved by server)
+                                if (rawContent.includes("### Thinking Process") && rawContent.includes("### Answer")) {
+                                    const parts = rawContent.split("### Answer");
+                                    thinkingContent = parts[0].replace("### Thinking Process", "").trim();
+                                    mainContent = parts.slice(1).join("### Answer").trim();
+                                }
+                                // Check if this is a live message with separate thinking steps state
+                                else if (msg.thinkingSteps && msg.thinkingSteps.length > 0) {
+                                    thinkingContent = msg.thinkingSteps.join("\n\n");
+                                }
 
-                                        // Links & Code
-                                        a: ({ node, ...props }: any) => <a className="font-medium underline underline-offset-4 decoration-primary text-primary hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
-                                        code: ({ node, ...props }: any) => {
-                                            const match = /language-(\w+)/.exec((props.className || ''))
-                                            if (match && match[1] === 'chart') {
-                                                return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
-                                            }
-                                            return !match ? (
-                                                <code className="bg-background/20 rounded px-1" {...props} />
-                                            ) : (
-                                                <code className="block bg-background/20 p-2 rounded my-2 whitespace-pre-wrap overflow-x-auto" {...props} />
-                                            )
+                                // 2. Clean "Main Content" if it's a Python string dump (previous fix)
+                                let displayContent = mainContent;
+                                if (mainContent.trim().startsWith("[") && mainContent.includes("'type': 'text'")) {
+                                    try {
+                                        const textMatch = mainContent.match(/'text':\s*'((?:[^'\\]|\\.)*)'/);
+                                        if (textMatch && textMatch[1]) {
+                                            displayContent = textMatch[1]
+                                                .replace(/\\n/g, '\n')
+                                                .replace(/\\'/g, "'")
+                                                .replace(/\\\\/g, "\\");
                                         }
-                                    }}
-                                >
-                                    {msg.content}
-                                </ReactMarkdown>
-                            )}
+                                    } catch (e) { console.warn("Failed to parse structured content", e); }
+                                }
+
+                                return (
+                                    <div className="flex flex-col gap-2 min-w-0">
+                                        {/* Collapsible Thinking Process */}
+                                        {thinkingContent && (
+                                            <details className="group bg-black/5 rounded-md border border-border/50 overflow-hidden">
+                                                <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-black/5 flex items-center select-none list-none">
+                                                    <span className="mr-2 opacity-50 transition-transform group-open:rotate-90">▶</span>
+                                                    Thinking Process
+                                                </summary>
+                                                <div className="px-3 py-2 border-t border-border/50 text-xs text-muted-foreground font-mono whitespace-pre-wrap bg-black/5 max-h-[300px] overflow-y-auto">
+                                                    {thinkingContent}
+                                                </div>
+                                            </details>
+                                        )}
+
+                                        {/* Main Assistant Response */}
+                                        {displayContent && (
+                                            <ReactMarkdown
+                                                remarkPlugins={[remarkGfm]}
+                                                components={{
+                                                    h1: ({ node, ...props }: any) => <h1 className="text-2xl font-bold mt-6 mb-4 pb-2 border-b border-border/50" {...props} />,
+                                                    h2: ({ node, ...props }: any) => <h2 className="text-xl font-semibold mt-5 mb-3 text-foreground/90" {...props} />,
+                                                    h3: ({ node, ...props }: any) => <h3 className="text-lg font-medium mt-4 mb-2 text-foreground/80" {...props} />,
+                                                    p: ({ node, ...props }: any) => <p className="leading-7 [&:not(:first-child)]:mt-4 text-base" {...props} />,
+                                                    ul: ({ node, ...props }: any) => <ul className="my-4 ml-6 list-disc [&>li]:mt-2" {...props} />,
+                                                    ol: ({ node, ...props }: any) => <ol className="my-4 ml-6 list-decimal [&>li]:mt-2" {...props} />,
+                                                    li: ({ node, ...props }: any) => <li className="leading-7" {...props} />,
+                                                    blockquote: ({ node, ...props }: any) => <blockquote className="mt-6 border-l-2 border-primary pl-6 italic text-muted-foreground" {...props} />,
+                                                    table: ({ node, ...props }: any) => (
+                                                        <div className="overflow-x-auto my-6 rounded-lg border bg-card shadow-sm">
+                                                            <table className="w-full text-sm" {...props} />
+                                                        </div>
+                                                    ),
+                                                    thead: ({ node, ...props }: any) => <thead className="bg-muted/50 text-muted-foreground font-medium" {...props} />,
+                                                    tr: ({ node, ...props }: any) => <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted" {...props} />,
+                                                    th: ({ node, ...props }: any) => <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0" {...props} />,
+                                                    td: ({ node, ...props }: any) => <td className="p-4 align-middle [&:has([role=checkbox])]:pr-0" {...props} />,
+                                                    a: ({ node, ...props }: any) => <a className="font-medium underline underline-offset-4 decoration-primary text-primary hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
+                                                    code: ({ node, ...props }: any) => {
+                                                        const match = /language-(\w+)/.exec((props.className || ''))
+                                                        if (match && match[1] === 'chart') {
+                                                            return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
+                                                        }
+                                                        return !match ? (
+                                                            <code className="bg-background/20 rounded px-1" {...props} />
+                                                        ) : (
+                                                            <code className="block bg-background/20 p-2 rounded my-2 whitespace-pre-wrap overflow-x-auto" {...props} />
+                                                        )
+                                                    }
+                                                }}
+                                            >
+                                                {displayContent}
+                                            </ReactMarkdown>
+                                        )}
+
+                                        {/* Loading/Typing Indicator for Content */}
+                                        {!displayContent && loading && i === messages.length - 1 && (
+                                            <span className="animate-pulse text-muted-foreground">Generating response...</span>
+                                        )}
+                                    </div>
+                                );
+                            })()}
                         </div>
                         {msg.role === 'user' && (
                             <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center shadow-sm flex-shrink-0">
@@ -308,22 +389,15 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         )}
                     </div>
                 ))}
-                {loading && (
+
+                {/* Global Loading Indicator (only if no message created yet, which is rare) */}
+                {loading && messages.length > 0 && messages[messages.length - 1].role !== 'assistant' && (
                     <div className="flex gap-3 justify-start items-center">
                         <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
                             <Bot className="h-5 w-5" />
                         </div>
-                        <div className="bg-muted p-3 rounded-lg flex items-center gap-2">
-                            <div className="flex gap-1">
-                                <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce"></span>
-                                <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce delay-75"></span>
-                                <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce delay-150"></span>
-                            </div>
-                            {thinkingText && (
-                                <span className="text-xs text-muted-foreground animate-pulse ml-2 font-mono">
-                                    {thinkingText}
-                                </span>
-                            )}
+                        <div className="bg-muted p-3 rounded-lg">
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                         </div>
                     </div>
                 )}

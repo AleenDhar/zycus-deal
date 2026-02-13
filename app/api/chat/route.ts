@@ -74,12 +74,13 @@ export async function POST(req: NextRequest) {
             system_prompt: systemPrompt,
             model: "openai:gpt-5", // User preference from chat.ts
             stream: true,
+            chat_id: chatId, // Pass chat_id so server can log directly to DB
             // enable_research: true // Optional: could be passed from client if needed
         };
 
         // 6. Call Python Server
         // Note: Using fetch with streaming response capability
-        const response = await fetch("http://13.201.66.23:8000/api/chat", {
+        const response = await fetch("https://agent-salesforce-link.replit.app/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -99,76 +100,110 @@ export async function POST(req: NextRequest) {
 
         const stream = new ReadableStream({
             async start(controller) {
-                const reader = response.body!.getReader();
+                const reader = response.body?.getReader();
+                if (!reader) {
+                    controller.close();
+                    return;
+                }
 
                 try {
+                    let buffer = ""; // Add buffer specifically for processing complete server events
+
                     while (true) {
                         const { done, value } = await reader.read();
                         if (done) break;
 
-                        // Pass chunk to client immediately
-                        controller.enqueue(value);
+                        // Pass chunk to client immediately if stream is open
+                        try {
+                            controller.enqueue(value);
+                        } catch (e) {
+                            // Controller might be closed if client disconnected
+                            console.warn("Stream closed while enqueuing:", e);
+                            break;
+                        }
 
                         // Process chunk for final save
                         const chunkStr = decoder.decode(value, { stream: true });
-                        console.log("Raw Chunk from Python:", chunkStr);
-                        const lines = chunkStr.split('\n');
+                        console.log("Raw Chunk:", chunkStr);
+                        buffer += chunkStr;
+
+                        const lines = buffer.split('\n\n');
+                        // Keep the last part in the buffer
+                        buffer = lines.pop() || "";
 
                         for (const line of lines) {
                             if (line.startsWith('data: ')) {
-                                try {
-                                    const jsonStr = line.slice(6);
-                                    if (!jsonStr.trim()) continue;
+                                const jsonStr = line.slice(6);
+                                if (jsonStr === '[DONE]') continue;
 
+                                try {
                                     const data = JSON.parse(jsonStr);
 
-                                    // Capture thinking steps
+                                    // Capture 'thinking' events (legacy simple status)
                                     if (data.type === 'thinking' && data.content) {
-                                        thinkingSteps.push(data.content);
+                                        // thinkingSteps.push(data.content); // Use tool_call for detail instead
+                                    }
+
+                                    // Capture detailed tool calls
+                                    if (data.type === 'tool_call') {
+                                        const toolInfo = `Calling **${data.tool}** with args: \`${JSON.stringify(data.args)}\``;
+                                        thinkingSteps.push(toolInfo);
+                                    }
+
+                                    // Capture tool results
+                                    if (data.type === 'tool_result') {
+                                        // Truncate very long results for display cleanliness, but keep enough context
+                                        const resultStr = data.result.length > 500 ? data.result.slice(0, 500) + "... (truncated)" : data.result;
+                                        const resultInfo = `Result from **${data.tool}**: \n> ${resultStr.replace(/\n/g, '\n> ')}`;
+                                        thinkingSteps.push(resultInfo);
                                     }
 
                                     // Accumulate 'token' content
                                     if (data.type === 'token' && data.content) {
-                                        fullResponse = data.content;
+                                        fullResponse += data.content;
                                     }
-                                    // Or 'final' content
+
+                                    // Handle 'final' content if sent as a block
                                     if (data.type === 'final' && data.content) {
-                                        fullResponse = data.content;
+                                        if (!fullResponse) fullResponse = data.content;
                                     }
                                 } catch (e) {
-                                    // Ignore parse errors for partial chunks
+                                    console.error("Error parsing chunk JSON", e);
                                 }
                             }
                         }
                     }
                 } catch (err) {
+                    console.error("Stream reading error:", err);
                     controller.error(err);
                 } finally {
                     try {
-                        // 8. Save Assistant Message to DB on completion
-                        if (fullResponse) {
-                            let finalContent = fullResponse;
-
-                            // Prepend thinking steps if they exist
-                            if (thinkingSteps.length > 0) {
-                                const thinkingBlock = `> **Thinking Process:**\n${thinkingSteps.map((step: string) => `> - ${step}`).join('\n')}\n\n`;
-                                finalContent = thinkingBlock + fullResponse;
-                            }
-
-                            const { error: assistantInsertError } = await supabase.from("chat_messages").insert({
-                                chat_id: chatId,
-                                role: "assistant",
-                                content: finalContent
-                            });
-
-                            if (assistantInsertError) {
-                                console.error("Failed to save assistant message:", assistantInsertError);
-                            }
-                        }
-                    } catch (dbError) {
-                        console.error("Failed to save assistant message:", dbError);
+                        controller.close();
+                    } catch (e) {
+                        // Ignore close errors
                     }
-                    controller.close();
+
+                    // 8. Save Assistant Message to DB on completion
+                    // DEPRECATED: The Python server now handles saving to DB directly if chat_id is provided.
+                    /*
+                    if (fullResponse) {
+                        // ... (previous logic for saving thinking steps + response)
+                        let finalContent = fullResponse;
+                        
+                        // We rely on server.py to save the rich log now.
+                        // Uncomment below ONLY if server.py is NOT configured with DB credentials.
+                        
+                        // const { error: assistantInsertError } = await supabase.from("chat_messages").insert({
+                        //     chat_id: chatId,
+                        //     role: "assistant",
+                        //     content: finalContent
+                        // });
+
+                        // if (assistantInsertError) {
+                        //     console.error("Failed to save assistant message:", assistantInsertError);
+                        // }
+                    }
+                    */
                 }
             }
         });
