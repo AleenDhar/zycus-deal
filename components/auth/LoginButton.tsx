@@ -22,10 +22,13 @@ export function LoginButton() {
         // Actually, to make it work immediately for "Guest (Demo)", custom logic is needed.
         // For "Login with Salesforce", we initiate OAuth.
 
+        const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : undefined;
+        console.log("OAuth Redirect URL:", redirectTo);
+
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: {
-                redirectTo: `${location.origin}/auth/callback`,
+                redirectTo,
             },
         });
 

@@ -16,6 +16,7 @@ export async function createNewChat(projectId: string) {
         .insert({
             project_id: projectId,
             title: "New Chat",
+            user_id: user.id
         })
         .select()
         .single();

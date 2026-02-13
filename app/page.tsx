@@ -2,10 +2,38 @@
 
 import { Button } from "@/components/ui/Button";
 import Link from "next/link";
-import { BarChart } from "lucide-react";
+import { BarChart, Loader2 } from "lucide-react";
 import { LoginButton } from "@/components/auth/LoginButton";
+import { useEffect, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 
-export default function Home() {
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const code = searchParams.get("code");
+
+  useEffect(() => {
+    if (code) {
+      // If we land here with a code, it means Supabase redirected to root instead of /auth/callback.
+      // We manually forward the code to the callback handler to complete the sign-in.
+      // using replace to ensure full reload which is safer for auth cookies
+      if (typeof window !== "undefined") {
+        window.location.replace(`/auth/callback?code=${code}`);
+      }
+    }
+  }, [code, router]);
+
+  if (code) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-muted-foreground">Completing sign in...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-full flex-col items-center justify-center bg-background p-4">
       <div className="absolute inset-0 -z-10 h-full w-full bg-white [background:radial-gradient(125%_125%_at_50%_10%,#fff_40%,#63e_100%)] dark:bg-neutral-950 dark:[background:radial-gradient(125%_125%_at_50%_10%,#000_40%,#63e_100%)] opacity-30"></div>
@@ -38,5 +66,13 @@ export default function Home() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="flex h-screen w-full items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>}>
+      <HomeContent />
+    </Suspense>
   );
 }
