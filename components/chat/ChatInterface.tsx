@@ -20,6 +20,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
+    const [thinkingText, setThinkingText] = useState("");
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<any>(null);
@@ -37,19 +38,74 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         setMessages(prev => [...prev, userMsg]);
         setInput("");
         setLoading(true);
-
-        const { sendMessage } = await import("@/lib/actions/chat");
+        setThinkingText("Thinking...");
 
         try {
-            const result = await sendMessage(projectId, chatId, messageContent, messages);
-            if (result.success && result.message) {
-                setMessages(prev => [...prev, { role: "assistant", content: result.message }]);
-            } else {
-                console.error("Message failed:", result.error);
-                setMessages(prev => [...prev, { role: "assistant", content: "Error: Failed to get response." }]);
+            const response = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    projectId,
+                    chatId,
+                    content: messageContent,
+                    previousMessages: messages
+                })
+            });
+
+            if (!response.ok || !response.body) {
+                throw new Error(response.statusText);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            // Add placeholder assistant message
+            setMessages(prev => [...prev, { role: "assistant", content: "" }]);
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                console.log("Received chunk:", chunk); // Debug raw chunk
+
+                const lines = chunk.split("\n\n");
+
+                for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                        try {
+                            const jsonStr = line.slice(6);
+                            if (!jsonStr.trim()) continue;
+                            const data = JSON.parse(jsonStr);
+                            // console.log("Parsed data:", data);
+
+                            if (data.type === "token" || data.type === "final") {
+                                setMessages(prev => {
+                                    const newMessages = [...prev];
+                                    const lastIndex = newMessages.length - 1;
+                                    const lastMsg = newMessages[lastIndex];
+
+                                    if (lastMsg.role === "assistant") {
+                                        newMessages[lastIndex] = {
+                                            ...lastMsg,
+                                            content: data.content
+                                        };
+                                    }
+                                    return newMessages;
+                                });
+                            } else if (data.type === "thinking") {
+                                console.log("Thinking:", data.content);
+                                setThinkingText(data.content);
+                            }
+                        } catch (e) {
+                            console.error("Error parsing stream chunk:", e);
+                        }
+                    }
+                }
             }
         } catch (e) {
             console.error(e);
+            setMessages(prev => [...prev, { role: "assistant", content: "Error: Failed to get response." }]);
         } finally {
             setLoading(false);
         }
@@ -253,14 +309,21 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     </div>
                 ))}
                 {loading && (
-                    <div className="flex gap-3 justify-start">
-                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                    <div className="flex gap-3 justify-start items-center">
+                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
                             <Bot className="h-5 w-5" />
                         </div>
-                        <div className="bg-muted p-3 rounded-lg flex items-center gap-1">
-                            <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce"></span>
-                            <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce delay-75"></span>
-                            <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce delay-150"></span>
+                        <div className="bg-muted p-3 rounded-lg flex items-center gap-2">
+                            <div className="flex gap-1">
+                                <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce"></span>
+                                <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce delay-75"></span>
+                                <span className="w-2 h-2 bg-foreground/30 rounded-full animate-bounce delay-150"></span>
+                            </div>
+                            {thinkingText && (
+                                <span className="text-xs text-muted-foreground animate-pulse ml-2 font-mono">
+                                    {thinkingText}
+                                </span>
+                            )}
                         </div>
                     </div>
                 )}
