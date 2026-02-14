@@ -518,7 +518,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                 <Bot className="h-3 w-3 md:h-5 md:w-5" />
                             </div>
                         )}
-                        <div className={`rounded-lg p-2.5 md:p-3 max-w-[85%] md:max-w-[75%] lg:max-w-[70%] text-sm md:text-sm overflow-hidden ${msg.role === 'user'
+                        <div className={`rounded-lg p-2.5 md:p-3 max-w-[85%] md:max-w-[75%] lg:max-w-[70%] text-sm md:text-sm overflow-hidden break-words ${msg.role === 'user'
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-foreground'
                             }`}>
@@ -605,8 +605,11 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                     ol: ({ node, ...props }: any) => (
                                                         <ol className="list-decimal pl-4 mb-2 space-y-1" {...props} />
                                                     ),
+                                                    li: ({ node, ...props }: any) => (
+                                                        <li className="break-words" {...props} />
+                                                    ),
                                                     blockquote: ({ node, ...props }: any) => (
-                                                        <blockquote className="border-l-4 border-primary/50 pl-4 py-1 italic bg-muted/50 rounded-r my-2" {...props} />
+                                                        <blockquote className="border-l-4 border-primary/50 pl-4 py-1 italic bg-muted/50 rounded-r my-2 break-words" {...props} />
                                                     ),
                                                     table: ({ node, ...props }: any) => (
                                                         <div className="overflow-x-auto my-4 rounded-lg border border-border">
