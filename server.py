@@ -35,6 +35,10 @@ import dotenv
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
+# Also load from .env.local if present (common in Next.js apps)
+if os.path.exists(".env.local"):
+    dotenv.load_dotenv(".env.local", override=True)
+    print("✓ Loaded environment from .env.local")
 
 # Disable LangSmith tracing IMMEDIATELY if not configured
 if not os.getenv("LANGCHAIN_API_KEY"):
@@ -858,8 +862,8 @@ class Config:
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", "8000"))
     # ... (existing config) ...
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "") or os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")
+    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 # ... (Initialize client) ...
 supabase: Optional[Client] = None
@@ -1059,7 +1063,154 @@ async def chat(request: ChatRequest):
         import traceback
         error_detail = f"{str(e)}\n{traceback.format_exc()}"
         print(f"\n[ERROR] /api/chat failed:\n{error_detail}\n")
-        raise HTTPException(status_code=500, detail=str(e))
+from fastapi import BackgroundTasks
+
+@app.post("/api/chat/async")
+async def chat_async(request: ChatRequest, background_tasks: BackgroundTasks):
+    """
+    Async chat endpoint that returns immediately and processes in background.
+    Events are logged to Supabase for the client to consume via Realtime.
+    """
+    import asyncio
+    
+    async def run_chat_background():
+        # Create a mock generator to consume the stream and trigger side effects (DB logs)
+        # We re-use the existing 'chat' logic but just iterate over it.
+        # Note: The 'chat' function is an async generator endpoint. 
+        # We need to call the underlying generator logic directly or wrapped.
+        
+        # Let's extract the core logic of 'chat' into a helper if possible, 
+        # or just invoke it and consume the stream.
+        
+        # ACTUALLY: The `chat` function above is an endpoint that returns a StreamingResponse.
+        # We can't easily call it directly from here and just "consume" it without overhead.
+        # Better to copy the core logic or refactor.
+        # FOR NOW: Let's inline the logic or use a helper. 
+        # Since I can't refactor the whole file easily in one go, I will implement the logic here 
+        # targeting the DB writing specifically.
+        
+        try:
+            print(f"[ASYNC] Starting background task for chat {request.chat_id}")
+            agent = await agent_manager.get_agent()
+            
+            messages = [
+                {"role": msg.role, "content": msg.content}
+                for msg in request.messages
+            ]
+            
+            # System prompt handling
+            if request.system_prompt:
+                 # Check if system prompt is already the first message, if not prepend
+                 if not messages or messages[0].get("role") != "system":
+                     messages.insert(0, {"role": "system", "content": request.system_prompt})
+                 else:
+                     messages[0]["content"] = request.system_prompt + "\n\n" + messages[0]["content"]
+            
+            final_response = ""
+            thinking_logs = []
+            seen_tool_calls = set()
+            
+            # Log "started" status
+            if supabase and request.chat_id:
+                supabase.table("chat_messages").insert({
+                    "chat_id": request.chat_id,
+                    "role": "assistant", # or system
+                    "content": "started",
+                    "type": "status",
+                    # "metadata": {"status": "started"} 
+                }).execute()
+
+            async for chunk in agent.astream({"messages": messages}, stream_mode="values"):
+                if "messages" not in chunk or not chunk["messages"]:
+                    continue
+                
+                last_message = chunk["messages"][-1]
+                msg_type = type(last_message).__name__
+                
+                # DB LOGGING HELPERS
+                def log_to_db(type_name, content, metadata=None):
+                    if supabase and request.chat_id:
+                        try:
+                            payload = {
+                                "chat_id": request.chat_id,
+                                "role": "assistant", # All agent events are assistant
+                                "content": content,
+                                "type": type_name
+                            }
+                            if metadata:
+                                payload["metadata"] = metadata
+                            supabase.table("chat_messages").insert(payload).execute()
+                        except Exception as e:
+                            print(f"DB Error: {e}")
+
+                # 1. TOOL CALLS
+                if msg_type == "AIMessage" and hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                    for tool_call in last_message.tool_calls:
+                        tool_call_id = f"{tool_call.get('name', 'unknown')}_{tool_call.get('id', '')}"
+                        if tool_call_id in seen_tool_calls:
+                            continue
+                        seen_tool_calls.add(tool_call_id)
+                        
+                        tool_name = tool_call.get('name', 'unknown')
+                        tool_args = tool_call.get('args', {})
+                        
+                        print(f"[ASYNC] Tool Call: {tool_name}")
+                        log_to_db("tool_call", "", {"tool": tool_name, "args": tool_args})
+                        log_to_db("status", "processing") # Keep UI spinning
+
+                # 2. TOOL RESULTS
+                elif msg_type == "ToolMessage":
+                    # We might want to dedup results too if needed, but usually they come once.
+                    # We can use the tool_call_id to dedup if necessary.
+                    # For now just log.
+                    tool_name = getattr(last_message, 'name', 'unknown')
+                    content = str(last_message.content)
+                    print(f"[ASYNC] Tool Result: {tool_name}")
+                    log_to_db("tool_result", content, {"tool": tool_name})
+
+                # 3. TEXT CONTENT (Streaming tokens vs Final)
+                # LangGraph 'values' stream gives full messages, not tokens.
+                # So we see the message grow. We don't want to log every token update to DB (too spammy).
+                # We only want to log the FINAL response.
+                elif msg_type == "AIMessage" and hasattr(last_message, 'content') and last_message.content:
+                     # Just track it locally. We log final at the end.
+                     final_response = str(last_message.content).strip()
+
+            # FINISHED - Log final response
+            if final_response:
+                print(f"[ASYNC] Final Response: {len(final_response)} chars")
+                if supabase and request.chat_id:
+                    supabase.table("chat_messages").insert({
+                        "chat_id": request.chat_id,
+                        "role": "assistant",
+                        "content": final_response,
+                        "type": "final" 
+                    }).execute()
+                    
+                    # Mark status done
+                    supabase.table("chat_messages").insert({
+                        "chat_id": request.chat_id,
+                        "role": "assistant",
+                        "content": "done",
+                        "type": "status"
+                    }).execute()
+            
+        except Exception as e:
+            print(f"[ASYNC ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+            if supabase and request.chat_id:
+                 supabase.table("chat_messages").insert({
+                    "chat_id": request.chat_id,
+                    "role": "assistant",
+                    "content": str(e),
+                    "type": "error"
+                }).execute()
+
+    # Start independent task
+    background_tasks.add_task(run_chat_background)
+    
+    return {"status": "started", "chat_id": request.chat_id}
 
 @app.post("/api/chat/structured")
 async def structured_chat(request: StructuredChatRequest):

@@ -123,8 +123,8 @@ export function ChartRenderer({ jsonString }: { jsonString: string }) {
                 {description && <p className="text-sm text-muted-foreground">{description}</p>}
             </CardHeader>
             <CardContent>
-                <div className="h-[300px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                <div className="h-[300px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                         {renderChart()}
                     </ResponsiveContainer>
                 </div>

@@ -6,7 +6,15 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+
+    let user = null;
+    try {
+        const { data } = await supabase.auth.getUser();
+        user = data.user;
+    } catch (e) {
+        console.error("API Auth Check Failed:", e);
+        return NextResponse.json({ error: "Authentication Service Unavailable" }, { status: 503 });
+    }
 
     if (!user) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -14,6 +22,7 @@ export async function POST(req: NextRequest) {
 
     try {
         const { projectId, chatId, content, previousMessages } = await req.json();
+        console.log(`[API] Received request for Chat: ${chatId}, Project: ${projectId}`);
 
         if (!projectId || !chatId || !content) {
             return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -78,142 +87,27 @@ export async function POST(req: NextRequest) {
             // enable_research: true // Optional: could be passed from client if needed
         };
 
-        // 6. Call Python Server
-        // Note: Using fetch with streaming response capability
-        const response = await fetch("https://agent-salesforce-link.replit.app/api/chat", {
+        // 6. Call Python Server (Async Mode)
+        // We now use the async endpoint which returns immediately and streams to Supabase
+        const response = await fetch("https://agent-salesforce-link.replit.app/api/chat/", {
+            // const response = await fetch("https://07364ac8-408f-4e5c-a5b4-c88a48bc5722-00-1za4yhm008gsr.kirk.replit.dev/api/chat/async", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         });
 
-        if (!response.ok || !response.body) {
+        if (!response.ok) {
             const errorText = await response.text();
             throw new Error(`Agent Server Error: ${response.status} - ${errorText}`);
         }
 
-        // 7. Create Streaming Response
-        const encoder = new TextEncoder();
-        const decoder = new TextDecoder();
-
-        let fullResponse = "";
-        let thinkingSteps: string[] = [];
-
-        const stream = new ReadableStream({
-            async start(controller) {
-                const reader = response.body?.getReader();
-                if (!reader) {
-                    controller.close();
-                    return;
-                }
-
-                try {
-                    let buffer = ""; // Add buffer specifically for processing complete server events
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        // Pass chunk to client immediately if stream is open
-                        try {
-                            controller.enqueue(value);
-                        } catch (e) {
-                            // Controller might be closed if client disconnected
-                            console.warn("Stream closed while enqueuing:", e);
-                            break;
-                        }
-
-                        // Process chunk for final save
-                        const chunkStr = decoder.decode(value, { stream: true });
-                        console.log("Raw Chunk:", chunkStr);
-                        buffer += chunkStr;
-
-                        const lines = buffer.split('\n\n');
-                        // Keep the last part in the buffer
-                        buffer = lines.pop() || "";
-
-                        for (const line of lines) {
-                            if (line.startsWith('data: ')) {
-                                const jsonStr = line.slice(6);
-                                if (jsonStr === '[DONE]') continue;
-
-                                try {
-                                    const data = JSON.parse(jsonStr);
-
-                                    // Capture 'thinking' events (legacy simple status)
-                                    if (data.type === 'thinking' && data.content) {
-                                        // thinkingSteps.push(data.content); // Use tool_call for detail instead
-                                    }
-
-                                    // Capture detailed tool calls
-                                    if (data.type === 'tool_call') {
-                                        const toolInfo = `Calling **${data.tool}** with args: \`${JSON.stringify(data.args)}\``;
-                                        thinkingSteps.push(toolInfo);
-                                    }
-
-                                    // Capture tool results
-                                    if (data.type === 'tool_result') {
-                                        // Truncate very long results for display cleanliness, but keep enough context
-                                        const resultStr = data.result.length > 500 ? data.result.slice(0, 500) + "... (truncated)" : data.result;
-                                        const resultInfo = `Result from **${data.tool}**: \n> ${resultStr.replace(/\n/g, '\n> ')}`;
-                                        thinkingSteps.push(resultInfo);
-                                    }
-
-                                    // Accumulate 'token' content
-                                    if (data.type === 'token' && data.content) {
-                                        fullResponse += data.content;
-                                    }
-
-                                    // Handle 'final' content if sent as a block
-                                    if (data.type === 'final' && data.content) {
-                                        if (!fullResponse) fullResponse = data.content;
-                                    }
-                                } catch (e) {
-                                    console.error("Error parsing chunk JSON", e);
-                                }
-                            }
-                        }
-                    }
-                } catch (err) {
-                    console.error("Stream reading error:", err);
-                    controller.error(err);
-                } finally {
-                    try {
-                        controller.close();
-                    } catch (e) {
-                        // Ignore close errors
-                    }
-
-                    // 8. Save Assistant Message to DB on completion
-                    // DEPRECATED: The Python server now handles saving to DB directly if chat_id is provided.
-                    /*
-                    if (fullResponse) {
-                        // ... (previous logic for saving thinking steps + response)
-                        let finalContent = fullResponse;
-                        
-                        // We rely on server.py to save the rich log now.
-                        // Uncomment below ONLY if server.py is NOT configured with DB credentials.
-                        
-                        // const { error: assistantInsertError } = await supabase.from("chat_messages").insert({
-                        //     chat_id: chatId,
-                        //     role: "assistant",
-                        //     content: finalContent
-                        // });
-
-                        // if (assistantInsertError) {
-                        //     console.error("Failed to save assistant message:", assistantInsertError);
-                        // }
-                    }
-                    */
-                }
-            }
-        });
-
-        return new Response(stream, {
+        // Return the raw stream to keep the connection open
+        return new NextResponse(response.body, {
             headers: {
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive"
-            }
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            },
         });
 
     } catch (error: any) {

@@ -15,30 +15,278 @@ interface ChatProps {
 }
 
 export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps) {
-    const [messages, setMessages] = useState(initialMessages);
+    // Process initial messages (consolidate tokens/events)
+    const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
+        if (msg.role === 'user') {
+            acc.push(msg);
+        } else if (msg.role === 'assistant') {
+            const lastMsg = acc[acc.length - 1];
+            const type = msg.type || 'message';
+
+            // Check if we should append to the last assistant message
+            if (lastMsg && lastMsg.role === 'assistant') {
+                switch (type) {
+                    case 'token':
+                        lastMsg.content = (lastMsg.content || "") + (msg.content || "");
+                        break;
+                    case 'tool_call':
+                        let args = "";
+                        if (msg.metadata && msg.metadata.args) {
+                            try {
+                                args = typeof msg.metadata.args === 'string' ? msg.metadata.args : JSON.stringify(msg.metadata.args, null, 2);
+                            } catch (e) { args = JSON.stringify(msg.metadata.args); }
+                        }
+                        const toolInfo = `Called **${msg.metadata?.tool || msg.metadata?.name || "Unknown Tool"}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), toolInfo];
+                        break;
+                    case 'tool_result':
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), `Result: ${msg.content}`];
+                        break;
+                    case 'thinking':
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), msg.content];
+                        break;
+                    case 'final':
+                        if (msg.content && msg.content.length > (lastMsg.content || "").length) {
+                            lastMsg.content = msg.content;
+                        }
+                        lastMsg.isProcessing = false;
+                        break;
+                    case 'status':
+                        lastMsg.status = msg.content;
+                        if (msg.content === 'processing' || msg.content === 'started') {
+                            lastMsg.isProcessing = true;
+                        } else {
+                            lastMsg.isProcessing = false;
+                        }
+                        break;
+                    case 'error':
+                        lastMsg.content = `Error: ${msg.content}`;
+                        lastMsg.isProcessing = false;
+                        break;
+                    default:
+                        if (type === 'message' && msg.content) lastMsg.content = (lastMsg.content || "") + msg.content;
+                }
+            } else {
+                // New assistant block
+                const newMsg = { ...msg, thinkingSteps: [], isProcessing: false, content: "" };
+
+                if (type === 'token') {
+                    newMsg.content = msg.content || "";
+                } else if (type === 'tool_call') {
+                    let args = "";
+                    if (msg.metadata && msg.metadata.args) {
+                        try {
+                            args = typeof msg.metadata.args === 'string' ? msg.metadata.args : JSON.stringify(msg.metadata.args, null, 2);
+                        } catch (e) { args = JSON.stringify(msg.metadata.args); }
+                    }
+                    newMsg.thinkingSteps = [`Called **${msg.metadata?.tool || msg.metadata?.name || "Unknown Tool"}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`];
+                    newMsg.isProcessing = true;
+                } else if (type === 'thinking') {
+                    newMsg.thinkingSteps = [msg.content];
+                    newMsg.isProcessing = true;
+                } else if (type === 'status') {
+                    newMsg.status = msg.content;
+                    newMsg.isProcessing = (msg.content === 'processing' || msg.content === 'started');
+                } else if (type === 'message') {
+                    newMsg.content = msg.content || "";
+                }
+                acc.push(newMsg);
+            }
+        }
+        return acc;
+    }, []);
+
+    // State definitions
+    const [messages, setMessages] = useState<any[]>(processedInitialMessages);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
-    const [isRecording, setIsRecording] = useState(false);
     const [thinkingText, setThinkingText] = useState("");
+    const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
+    const [isRecording, setIsRecording] = useState(false);
+
+    // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<any>(null);
+    const supabase = createClient();
 
+    // Scroll to bottom on messages change
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [messages]);
+    }, [messages, loading]);
+
+    // Realtime Subscription
+    useEffect(() => {
+        if (!chatId) {
+            console.warn("[Realtime] No chatId provided, skipping subscription.");
+            return;
+        }
+        console.log(`[Realtime] Setting up subscription for chat:${chatId}`);
+
+        const channel = supabase
+            .channel(`chat:${chatId}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: 'INSERT',
+                    schema: 'public',
+                    table: 'chat_messages',
+                    filter: `chat_id=eq.${chatId}`
+                },
+                (payload: any) => {
+                    const newMsg = payload.new;
+                    setMessages(prev => {
+                        // 1. Handle User Messages (Deduplication)
+                        if (newMsg.role === 'user') {
+                            const lastMsg = prev[prev.length - 1];
+                            if (lastMsg && lastMsg.role === 'user' && lastMsg.content === newMsg.content && lastMsg.id !== newMsg.id) {
+                                const newMessages = [...prev];
+                                newMessages[prev.length - 1] = { ...lastMsg, id: newMsg.id };
+                                return newMessages;
+                            }
+                            if (!prev.some(m => m.id === newMsg.id)) {
+                                return [...prev, newMsg];
+                            }
+                            return prev;
+                        }
+
+                        // 2. Handle Assistant Events
+                        if (newMsg.role === 'assistant') {
+                            const type = newMsg.type || 'message';
+                            const newMessages = [...prev];
+                            let lastMsgIndex = newMessages.length - 1;
+                            let lastMsg = newMessages[lastMsgIndex];
+
+                            if (!lastMsg || lastMsg.role !== 'assistant') {
+                                const placeholder = { role: 'assistant', content: "", thinkingSteps: [], id: newMsg.id, isProcessing: true };
+                                newMessages.push(placeholder);
+                                lastMsgIndex = newMessages.length - 1;
+                                lastMsg = placeholder;
+                            }
+
+                            switch (type) {
+                                case 'token':
+                                    if (newMsg.content && newMsg.content.length >= (lastMsg.content || "").length) {
+                                        newMessages[lastMsgIndex] = {
+                                            ...lastMsg,
+                                            content: newMsg.content
+                                        };
+                                    }
+                                    break;
+                                case 'tool_call':
+                                    let args = "";
+                                    if (newMsg.metadata) {
+                                        let meta = newMsg.metadata;
+                                        if (typeof meta === 'string') {
+                                            try { meta = JSON.parse(meta); } catch (e) { }
+                                        }
+                                        const rawArgs = meta.args || {};
+                                        try {
+                                            args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
+                                        } catch (e) { args = JSON.stringify(rawArgs); }
+
+                                        const toolName = meta.tool || meta.name || "Unknown Tool";
+                                        const toolInfo = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
+
+                                        newMessages[lastMsgIndex] = {
+                                            ...lastMsg,
+                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), toolInfo],
+                                            isProcessing: true
+                                        };
+                                    }
+                                    break;
+                                case 'tool_result':
+                                    const resultText = newMsg.content;
+                                    newMessages[lastMsgIndex] = {
+                                        ...lastMsg,
+                                        thinkingSteps: [...(lastMsg.thinkingSteps || []), `Result: ${resultText}`]
+                                    };
+                                    break;
+                                case 'thinking':
+                                    newMessages[lastMsgIndex] = {
+                                        ...lastMsg,
+                                        thinkingSteps: [...(lastMsg.thinkingSteps || []), newMsg.content]
+                                    };
+                                    break;
+                                case 'status':
+                                    setThinkingText(newMsg.content || "Processing...");
+                                    newMessages[lastMsgIndex] = {
+                                        ...lastMsg,
+                                        status: newMsg.content,
+                                        isProcessing: (newMsg.content === 'processing' || newMsg.content === 'started')
+                                    };
+                                    if (newMsg.content === 'done' || newMsg.content === 'completed') {
+                                        newMessages[lastMsgIndex].isProcessing = false;
+                                        setLoading(false);
+                                    }
+                                    break;
+                                case 'final':
+                                    newMessages[lastMsgIndex] = {
+                                        ...lastMsg,
+                                        content: newMsg.content,
+                                        isProcessing: false
+                                    };
+                                    setLoading(false);
+                                    break;
+                                case 'error':
+                                    newMessages[lastMsgIndex] = {
+                                        ...lastMsg,
+                                        content: `Error: ${newMsg.content}`,
+                                        isProcessing: false
+                                    };
+                                    setLoading(false);
+                                    break;
+                                default:
+                                    if (newMsg.content) {
+                                        const current = lastMsg.content || "";
+                                        if (newMsg.content.startsWith(current)) {
+                                            newMessages[lastMsgIndex].content = newMsg.content;
+                                        } else {
+                                            newMessages[lastMsgIndex].content = current + newMsg.content;
+                                        }
+                                    }
+                            }
+                            return newMessages;
+                        }
+                        return prev;
+                    });
+                }
+            )
+            .subscribe((status) => {
+                console.log(`[Realtime] Subscription status for chat:${chatId}:`, status);
+                if (status === 'SUBSCRIBED') setRealtimeStatus('connected');
+                else if (status === 'CHANNEL_ERROR') setRealtimeStatus('error');
+                else if (status === 'TIMED_OUT') setRealtimeStatus('error');
+                else if (status === 'CLOSED') setRealtimeStatus('disconnected');
+            });
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [chatId, supabase]);
 
     const handleSend = async (messageContent: string = input) => {
         if (!messageContent.trim()) return;
 
-        const userMsg = { role: "user", content: messageContent };
+        const tempId = crypto.randomUUID();
+        const userMsg = { role: "user", content: messageContent, id: tempId };
         setMessages(prev => [...prev, userMsg]);
         setInput("");
         setLoading(true);
         setThinkingText("Thinking...");
+
+        // Placeholder for assistant message
+        const assistantMsgId = crypto.randomUUID();
+        setMessages(prev => [...prev, {
+            role: "assistant",
+            content: "",
+            id: assistantMsgId,
+            thinkingSteps: [],
+            isProcessing: true
+        }]);
 
         try {
             const response = await fetch("/api/chat", {
@@ -52,93 +300,106 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                 })
             });
 
-            if (!response.ok || !response.body) {
-                throw new Error(response.statusText);
+            if (!response.ok) {
+                throw new Error(await response.text());
             }
 
-            const reader = response.body.getReader();
+            const reader = response.body?.getReader();
             const decoder = new TextDecoder();
 
-            // Add placeholder assistant message
-            setMessages(prev => [...prev, { role: "assistant", content: "" }]);
+            if (reader) {
+                console.log("[ChatInterface] Reading stream...");
+                let buffer = "";
 
-            let buffer = "";
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
 
-                const chunk = decoder.decode(value, { stream: true });
-                // console.log("Received chunk:", chunk); // Debug raw chunk - commented out to reduce noise
+                    const lines = buffer.split("\n\n");
+                    buffer = lines.pop() || ""; // Keep the last incomplete line
 
-                buffer += chunk;
-                const parts = buffer.split("\n\n");
+                    for (const line of lines) {
+                        if (line.startsWith("data: ")) {
+                            try {
+                                const jsonStr = line.slice(6);
+                                if (jsonStr.trim() === "[DONE]") continue;
+                                const data = JSON.parse(jsonStr);
 
-                // Keep the last part in the buffer (it might be incomplete)
-                buffer = parts.pop() || "";
-
-                for (const line of parts) {
-                    if (line.startsWith("data: ")) {
-                        try {
-                            const jsonStr = line.slice(6);
-                            if (!jsonStr.trim()) continue;
-                            const data = JSON.parse(jsonStr);
-                            // console.log("Parsed data:", data);
-
-                            if (data.type === "token" || data.type === "final") {
+                                // Handle different event types from the stream
                                 setMessages(prev => {
                                     const newMessages = [...prev];
-                                    const lastIndex = newMessages.length - 1;
-                                    const lastMsg = newMessages[lastIndex];
+                                    const lastMsgIndex = newMessages.length - 1;
+                                    const lastMsg = newMessages[lastMsgIndex];
 
-                                    if (lastMsg.role === "assistant") {
-                                        newMessages[lastIndex] = {
+                                    // Ensure we are updating the assistant message
+                                    if (!lastMsg || lastMsg.role !== 'assistant') return prev;
+
+                                    if (data.type === 'token' || data.type === 'content') {
+                                        const text = data.content || data.token || "";
+                                        // If content is just appended
+                                        newMessages[lastMsgIndex] = {
                                             ...lastMsg,
-                                            content: data.content
+                                            content: (lastMsg.content || "") + text
                                         };
+                                    } else if (data.type === 'tool_call') {
+                                        const meta = data.metadata || {};
+                                        let args = "";
+                                        const rawArgs = data.args || meta.args || {};
+                                        try {
+                                            args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
+                                        } catch (e) { args = JSON.stringify(rawArgs); }
+
+                                        const toolName = data.tool || meta.tool || meta.name || "Unknown Tool";
+                                        const toolInfo = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
+
+                                        newMessages[lastMsgIndex] = {
+                                            ...lastMsg,
+                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), toolInfo],
+                                            isProcessing: true
+                                        };
+                                    } else if (data.type === 'tool_result') {
+                                        const resultText = data.content;
+                                        newMessages[lastMsgIndex] = {
+                                            ...lastMsg,
+                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), `Result: ${resultText}`]
+                                        };
+                                    } else if (data.type === 'thinking') {
+                                        newMessages[lastMsgIndex] = {
+                                            ...lastMsg,
+                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), data.content]
+                                        };
+                                    } else if (data.type === 'status') {
+                                        setThinkingText(data.content || "Processing...");
+                                        // Update status if needed
+                                    } else if (data.type === 'final' || data.type === 'complete') {
+                                        newMessages[lastMsgIndex].isProcessing = false;
+                                        if (data.content && data.content.length > (lastMsg.content || "").length) {
+                                            newMessages[lastMsgIndex].content = data.content;
+                                        }
+                                    } else if (data.type === 'error') {
+                                        newMessages[lastMsgIndex].content += `\n\nError: ${data.content}`;
+                                        newMessages[lastMsgIndex].isProcessing = false;
                                     }
+
                                     return newMessages;
                                 });
-                            } else if (data.type === "tool_call") {
-                                const toolInfo = `Called **${data.tool}** with args: \`${JSON.stringify(data.args)}\``;
-                                setMessages(prev => {
-                                    const newMessages = [...prev];
-                                    const lastMsg = newMessages[newMessages.length - 1];
-                                    if (lastMsg.role === 'assistant') {
-                                        const steps = lastMsg.thinkingSteps || [];
-                                        newMessages[newMessages.length - 1] = {
-                                            ...lastMsg,
-                                            thinkingSteps: [...steps, toolInfo]
-                                        };
-                                    }
-                                    return newMessages;
-                                });
-                            } else if (data.type === "tool_result") {
-                                const resultStr = data.result.length > 200 ? data.result.slice(0, 200) + "..." : data.result;
-                                const resultInfo = `Result from **${data.tool}**: \n> ${resultStr}`;
-                                setMessages(prev => {
-                                    const newMessages = [...prev];
-                                    const lastMsg = newMessages[newMessages.length - 1];
-                                    if (lastMsg.role === 'assistant') {
-                                        const steps = lastMsg.thinkingSteps || [];
-                                        newMessages[newMessages.length - 1] = {
-                                            ...lastMsg,
-                                            thinkingSteps: [...steps, resultInfo]
-                                        };
-                                    }
-                                    return newMessages;
-                                });
+
+                            } catch (e) {
+                                console.error("Error parsing stream JSON", e, line);
                             }
-                        } catch (e) {
-                            console.error("Error parsing stream chunk:", e);
                         }
                     }
                 }
+                console.log("[ChatInterface] Stream finished.");
             }
-        } catch (e) {
+            setLoading(false);
+
+        } catch (e: any) {
             console.error(e);
-            setMessages(prev => [...prev, { role: "assistant", content: "Error: Failed to get response." }]);
-        } finally {
+            setMessages(prev => [...prev, { role: "assistant", content: `Error: ${e.message || "Failed to start chat."}` }]);
             setLoading(false);
         }
     };
@@ -148,25 +409,20 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
 
         const file = e.target.files[0];
         setUploading(true);
-
-        const supabase = createClient();
         const filePath = `chat/${chatId}/${Date.now()}_${file.name}`;
 
         try {
-            const { data, error } = await supabase.storage
+            const { error } = await supabase.storage
                 .from("project-files")
                 .upload(filePath, file);
 
             if (error) throw error;
 
-            // Get Public URL
             const { data: { publicUrl } } = supabase.storage
                 .from("project-files")
                 .getPublicUrl(filePath);
 
             const fileMessage = `[File Uploaded: ${file.name}](${publicUrl})`;
-
-            // Send as a message
             await handleSend(fileMessage);
 
         } catch (error: any) {
@@ -185,8 +441,8 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             if (SpeechRecognition) {
                 console.log('Speech recognition available');
                 recognitionRef.current = new SpeechRecognition();
-                recognitionRef.current.continuous = true; // Keep recording until manually stopped
-                recognitionRef.current.interimResults = true; // Show results as you speak
+                recognitionRef.current.continuous = true;
+                recognitionRef.current.interimResults = true;
                 recognitionRef.current.lang = 'en-US';
 
                 recognitionRef.current.onstart = () => {
@@ -214,7 +470,6 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
 
                 recognitionRef.current.onerror = (event: any) => {
                     console.error('Speech recognition error:', event.error);
-                    alert(`Speech recognition error: ${event.error}`);
                     setIsRecording(false);
                 };
 
@@ -222,58 +477,52 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     console.log('Speech recognition ended');
                     setIsRecording(false);
                 };
-            } else {
-                console.error('Speech recognition not supported');
             }
         }
     }, []);
 
     const toggleVoiceInput = () => {
         if (!recognitionRef.current) {
-            alert('Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari.');
+            alert('Speech recognition is not supported in your browser.');
             return;
         }
 
         if (isRecording) {
-            console.log('Stopping recording');
             recognitionRef.current.stop();
             setIsRecording(false);
         } else {
-            console.log('Starting recording');
             try {
                 recognitionRef.current.start();
                 setIsRecording(true);
             } catch (error) {
                 console.error('Failed to start recognition:', error);
-                alert('Failed to start voice input. Please try again.');
+                alert('Failed to start voice input.');
             }
         }
     };
 
     return (
-        <div className="flex flex-col h-full bg-background">
-            <div className="flex-1 overflow-y-auto p-4 space-y-4" ref={scrollRef}>
+        <div className="flex flex-col h-full bg-background relative">
+
+
+            <div className="flex-1 overflow-y-auto p-2 md:p-4 space-y-4" ref={scrollRef}>
                 {messages.length === 0 && (
-                    <div className="flex h-full items-center justify-center text-muted-foreground opacity-50">
+                    <div className="flex h-full items-center justify-center text-muted-foreground opacity-50 px-4 text-center">
                         Start a conversation or upload a file...
                     </div>
                 )}
                 {messages.map((msg, i) => (
-                    <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div key={i} className={`flex gap-2 md:gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         {msg.role === 'assistant' && (
-                            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
-                                <Bot className="h-5 w-5" />
+                            <div className="h-6 w-6 md:h-8 md:w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
+                                <Bot className="h-3 w-3 md:h-5 md:w-5" />
                             </div>
                         )}
-                        <div className={`rounded-lg p-3 max-w-[80%] text-sm overflow-hidden ${msg.role === 'user'
+                        <div className={`rounded-lg p-2.5 md:p-3 max-w-[85%] md:max-w-[75%] lg:max-w-[70%] text-sm md:text-sm overflow-hidden ${msg.role === 'user'
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-foreground'
                             }`}>
                             {msg.role === 'user' ? (
-                                // For user messages, keep simple text rendering to avoid markdown parsing of simple inputs if preferred, 
-                                // but markdown for user input is also fine. Let's stick to simple text for user to match typical chat apps, 
-                                // or minimal markdown. 
-                                // Actually, simpler:
                                 <div className="whitespace-pre-wrap">
                                     {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
                                         const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
@@ -289,23 +538,19 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     })}
                                 </div>
                             ) : (() => {
-                                // 1. Parse Content (History vs Live)
                                 const rawContent = msg.content || "";
                                 let thinkingContent = "";
                                 let mainContent = rawContent;
 
-                                // Check if this is a historical message with embedded thinking logs (saved by server)
                                 if (rawContent.includes("### Thinking Process") && rawContent.includes("### Answer")) {
                                     const parts = rawContent.split("### Answer");
                                     thinkingContent = parts[0].replace("### Thinking Process", "").trim();
                                     mainContent = parts.slice(1).join("### Answer").trim();
                                 }
-                                // Check if this is a live message with separate thinking steps state
                                 else if (msg.thinkingSteps && msg.thinkingSteps.length > 0) {
                                     thinkingContent = msg.thinkingSteps.join("\n\n");
                                 }
 
-                                // 2. Clean "Main Content" if it's a Python string dump (previous fix)
                                 let displayContent = mainContent;
                                 if (mainContent.trim().startsWith("[") && mainContent.includes("'type': 'text'")) {
                                     try {
@@ -316,85 +561,101 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                 .replace(/\\'/g, "'")
                                                 .replace(/\\\\/g, "\\");
                                         }
-                                    } catch (e) { console.warn("Failed to parse structured content", e); }
+                                    } catch (e) { }
                                 }
 
                                 return (
-                                    <div className="flex flex-col gap-2 min-w-0">
-                                        {/* Collapsible Thinking Process */}
+                                    <div className="flex flex-col gap-2 min-w-0 max-w-full">
                                         {thinkingContent && (
                                             <details className="group bg-black/5 rounded-md border border-border/50 overflow-hidden">
                                                 <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-black/5 flex items-center select-none list-none">
                                                     <span className="mr-2 opacity-50 transition-transform group-open:rotate-90">▶</span>
                                                     Thinking Process
                                                 </summary>
-                                                <div className="px-3 py-2 border-t border-border/50 text-xs text-muted-foreground font-mono whitespace-pre-wrap bg-black/5 max-h-[300px] overflow-y-auto">
+                                                <div className="px-3 py-2 border-t border-border/50 text-xs text-muted-foreground font-mono whitespace-pre-wrap break-all bg-black/5 max-h-[300px] overflow-y-auto">
                                                     {thinkingContent}
                                                 </div>
                                             </details>
                                         )}
 
-                                        {/* Main Assistant Response */}
                                         {displayContent && (
                                             <ReactMarkdown
                                                 remarkPlugins={[remarkGfm]}
                                                 components={{
-                                                    h1: ({ node, ...props }: any) => <h1 className="text-2xl font-bold mt-6 mb-4 pb-2 border-b border-border/50" {...props} />,
-                                                    h2: ({ node, ...props }: any) => <h2 className="text-xl font-semibold mt-5 mb-3 text-foreground/90" {...props} />,
-                                                    h3: ({ node, ...props }: any) => <h3 className="text-lg font-medium mt-4 mb-2 text-foreground/80" {...props} />,
-                                                    p: ({ node, ...props }: any) => <p className="leading-7 [&:not(:first-child)]:mt-4 text-base" {...props} />,
-                                                    ul: ({ node, ...props }: any) => <ul className="my-4 ml-6 list-disc [&>li]:mt-2" {...props} />,
-                                                    ol: ({ node, ...props }: any) => <ol className="my-4 ml-6 list-decimal [&>li]:mt-2" {...props} />,
-                                                    li: ({ node, ...props }: any) => <li className="leading-7" {...props} />,
-                                                    blockquote: ({ node, ...props }: any) => <blockquote className="mt-6 border-l-2 border-primary pl-6 italic text-muted-foreground" {...props} />,
-                                                    table: ({ node, ...props }: any) => (
-                                                        <div className="overflow-x-auto my-6 rounded-lg border bg-card shadow-sm">
-                                                            <table className="w-full text-sm" {...props} />
-                                                        </div>
-                                                    ),
-                                                    thead: ({ node, ...props }: any) => <thead className="bg-muted/50 text-muted-foreground font-medium" {...props} />,
-                                                    tr: ({ node, ...props }: any) => <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted" {...props} />,
-                                                    th: ({ node, ...props }: any) => <th className="h-10 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0" {...props} />,
-                                                    td: ({ node, ...props }: any) => <td className="p-4 align-middle [&:has([role=checkbox])]:pr-0" {...props} />,
-                                                    a: ({ node, ...props }: any) => <a className="font-medium underline underline-offset-4 decoration-primary text-primary hover:text-primary/80 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
                                                     code: ({ node, ...props }: any) => {
                                                         const match = /language-(\w+)/.exec((props.className || ''))
                                                         if (match && match[1] === 'chart') {
                                                             return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
                                                         }
                                                         return !match ? (
-                                                            <code className="bg-background/20 rounded px-1" {...props} />
+                                                            <code className="bg-background/20 rounded px-1 break-all" {...props} />
                                                         ) : (
-                                                            <code className="block bg-background/20 p-2 rounded my-2 whitespace-pre-wrap overflow-x-auto" {...props} />
+                                                            <code className="block bg-background/20 p-2 rounded my-2 whitespace-pre-wrap break-words overflow-x-auto max-w-full text-xs md:text-sm" {...props} />
                                                         )
-                                                    }
+                                                    },
+                                                    p: ({ node, ...props }: any) => (
+                                                        <p className="break-words mb-2 last:mb-0" {...props} />
+                                                    ),
+                                                    a: ({ node, ...props }: any) => (
+                                                        <a className="text-primary underline hover:opacity-80 break-all" target="_blank" rel="noopener noreferrer" {...props} />
+                                                    ),
+                                                    ul: ({ node, ...props }: any) => (
+                                                        <ul className="list-disc pl-4 mb-2 space-y-1" {...props} />
+                                                    ),
+                                                    ol: ({ node, ...props }: any) => (
+                                                        <ol className="list-decimal pl-4 mb-2 space-y-1" {...props} />
+                                                    ),
+                                                    blockquote: ({ node, ...props }: any) => (
+                                                        <blockquote className="border-l-4 border-primary/50 pl-4 py-1 italic bg-muted/50 rounded-r my-2" {...props} />
+                                                    ),
+                                                    table: ({ node, ...props }: any) => (
+                                                        <div className="overflow-x-auto my-4 rounded-lg border border-border">
+                                                            <table className="w-full text-sm text-left border-collapse" {...props} />
+                                                        </div>
+                                                    ),
+                                                    thead: ({ node, ...props }: any) => (
+                                                        <thead className="bg-muted text-muted-foreground uppercase text-xs" {...props} />
+                                                    ),
+                                                    tbody: ({ node, ...props }: any) => (
+                                                        <tbody className="divide-y divide-border" {...props} />
+                                                    ),
+                                                    tr: ({ node, ...props }: any) => (
+                                                        <tr className="bg-card hover:bg-muted/50 transition-colors" {...props} />
+                                                    ),
+                                                    th: ({ node, ...props }: any) => (
+                                                        <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
+                                                    ),
+                                                    td: ({ node, ...props }: any) => (
+                                                        <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
+                                                    )
                                                 }}
                                             >
                                                 {displayContent}
                                             </ReactMarkdown>
                                         )}
 
-                                        {/* Loading/Typing Indicator for Content */}
-                                        {!displayContent && loading && i === messages.length - 1 && (
-                                            <span className="animate-pulse text-muted-foreground">Generating response...</span>
+                                        {(msg.isProcessing || (loading && i === messages.length - 1)) && (
+                                            <div className="flex items-center gap-2 mt-2 text-muted-foreground">
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                <span className="text-xs">{thinkingText || "Processing..."}</span>
+                                            </div>
                                         )}
                                     </div>
                                 );
                             })()}
                         </div>
                         {msg.role === 'user' && (
-                            <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center shadow-sm flex-shrink-0">
-                                <User className="h-4 w-4" />
+                            <div className="h-6 w-6 md:h-8 md:w-8 rounded-full bg-secondary flex items-center justify-center shadow-sm flex-shrink-0">
+                                <User className="h-3 w-3 md:h-4 md:w-4" />
                             </div>
                         )}
                     </div>
                 ))}
 
-                {/* Global Loading Indicator (only if no message created yet, which is rare) */}
                 {loading && messages.length > 0 && messages[messages.length - 1].role !== 'assistant' && (
-                    <div className="flex gap-3 justify-start items-center">
-                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
-                            <Bot className="h-5 w-5" />
+                    <div className="flex gap-2 md:gap-3 justify-start items-center">
+                        <div className="h-6 w-6 md:h-8 md:w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
+                            <Bot className="h-3 w-3 md:h-5 md:w-5" />
                         </div>
                         <div className="bg-muted p-3 rounded-lg">
                             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -402,13 +663,13 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     </div>
                 )}
             </div>
-            <div className="p-4 border-t bg-card flex gap-2">
+
+            <div className="p-2 md:p-4 border-t bg-card flex gap-2 items-center w-full max-w-full">
                 <input
                     type="file"
                     ref={fileInputRef}
                     className="hidden"
                     onChange={handleFileUpload}
-                    // Accept common types
                     accept=".pdf,.csv,.xls,.xlsx,.txt,image/*"
                 />
                 <Button
@@ -416,6 +677,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     size="icon"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={loading || uploading}
+                    className="h-8 w-8 md:h-10 md:w-10 shrink-0"
                 >
                     {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
                 </Button>
@@ -425,20 +687,26 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     size="icon"
                     onClick={toggleVoiceInput}
                     disabled={loading}
-                    className={isRecording ? "animate-pulse" : ""}
+                    className={`h-8 w-8 md:h-10 md:w-10 shrink-0 ${isRecording ? "animate-pulse" : ""}`}
                 >
                     {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                 </Button>
 
                 <input
-                    className="flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="flex-1 bg-background border rounded-md px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-primary min-w-0"
                     placeholder={isRecording ? "Listening..." : "Type a message..."}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
                     disabled={loading}
                 />
-                <Button onClick={() => handleSend()} disabled={loading || !input.trim()} size="icon">
+
+                <Button
+                    onClick={() => handleSend()}
+                    disabled={loading || !input.trim()}
+                    size="icon"
+                    className="h-8 w-8 md:h-10 md:w-10 shrink-0"
+                >
                     <Send className="h-4 w-4" />
                 </Button>
             </div>

@@ -31,7 +31,20 @@ export async function updateSession(request: NextRequest) {
 
     // refresh session if expired - required for Server Components
     // https://supabase.com/docs/guides/auth/server-side/nextjs
-    const { data: { user } } = await supabase.auth.getUser()
+    let user: any = null;
+    try {
+        console.log("Middleware: Checking Supabase session...");
+        const { data, error } = await supabase.auth.getUser()
+        if (error) {
+            console.log("Middleware: Auth error (handled):", error.message);
+        } else {
+            console.log("Middleware: User found:", data.user?.id);
+            user = data.user
+        }
+    } catch (e) {
+        console.log("Middleware: Catastrophic fetch error caught:", e)
+        // proceed as unauthenticated
+    }
 
     return { response: supabaseResponse, user }
 }
