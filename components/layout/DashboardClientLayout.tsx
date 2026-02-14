@@ -24,7 +24,7 @@ export function DashboardClientLayout({ children }: { children: React.ReactNode 
                     }`}
             >
                 <Header onMenuClick={() => setIsMobileOpen(true)} />
-                <main className={`flex-1 ${isChatPage ? 'overflow-hidden p-0' : 'overflow-y-auto p-8'}`}>
+                <main className={`flex-1 ${isChatPage ? 'overflow-hidden p-0' : 'overflow-y-auto p-4 md:p-8'}`}>
                     {children}
                 </main>
             </div>
