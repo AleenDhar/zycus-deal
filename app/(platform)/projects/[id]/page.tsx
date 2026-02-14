@@ -58,7 +58,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     const memories = await getProjectMemories(id);
 
     return (
-        <div className="flex flex-col gap-8">
+        <div className="flex flex-col gap-8 w-full max-w-screen overflow-x-hidden">
             <div className="flex flex-col gap-4 border-b pb-6">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
@@ -94,7 +94,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                 <div className="md:col-span-2 space-y-6">
                     <h2 className="text-xl font-semibold">Conversations</h2>
                     {chats && chats.length > 0 ? (
-                        <div className="grid gap-3">
+                        <div className="grid gap-3 w-full max-w-screen overflow-x-hidden">
                             {chats.map((chat: { id: string; title: string; created_at: string }) => (
                                 <Link key={chat.id} href={`/projects/${project.id}/chat/${chat.id}`}>
                                     <div className="border rounded-xl hover:bg-accent/50 transition-colors p-4 block">
@@ -119,10 +119,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                         </div>
                     )}
 
-                    <ProjectFiles projectId={project.id} initialFiles={documents || []} />
+                    <div className="w-full max-w-screen overflow-x-hidden">
+                        <ProjectFiles projectId={project.id} initialFiles={documents || []} />
+                    </div>
                 </div>
 
-                <div className="space-y-6">
+                <div className="space-y-6 w-full max-w-screen overflow-x-hidden">
                     <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} />
                     <MemoryManager projectId={project.id} memories={memories} />
                 </div>

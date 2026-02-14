@@ -12,7 +12,7 @@ export function DashboardClientLayout({ children }: { children: React.ReactNode 
     const isChatPage = pathname?.includes("/chat/");
 
     return (
-        <div className="flex h-screen w-full overflow-hidden bg-background">
+        <div className="flex h-screen w-full max-w-[100vw] overflow-hidden bg-background">
             <Sidebar
                 isCollapsed={isCollapsed}
                 toggleCollapse={() => setIsCollapsed(!isCollapsed)}
@@ -20,7 +20,7 @@ export function DashboardClientLayout({ children }: { children: React.ReactNode 
                 setMobileOpen={setIsMobileOpen}
             />
             <div
-                className={`flex flex-1 flex-col transition-all duration-300 ml-0 ${isCollapsed ? 'md:ml-16' : 'md:ml-64'
+                className={`flex flex-1 flex-col transition-all duration-300 ml-0 w-full max-w-full overflow-hidden ${isCollapsed ? 'md:ml-16' : 'md:ml-64'
                     }`}
             >
                 <Header onMenuClick={() => setIsMobileOpen(true)} />

@@ -69,7 +69,7 @@ export function SystemPromptCard({ projectId, initialPrompt }: SystemPromptCardP
                         placeholder="Enter system prompt..."
                     />
                 ) : (
-                    <div className="bg-muted p-3 rounded-md text-xs font-mono text-muted-foreground whitespace-pre-wrap">
+                    <div className="bg-muted p-3 rounded-md text-xs font-mono text-muted-foreground whitespace-pre-wrap max-h-[200px] overflow-y-auto">
                         {prompt || "Default system prompt applied."}
                     </div>
                 )}

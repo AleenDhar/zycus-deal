@@ -89,8 +89,8 @@ export async function POST(req: NextRequest) {
 
         // 6. Call Python Server (Async Mode)
         // We now use the async endpoint which returns immediately and streams to Supabase
-        const response = await fetch("https://agent-salesforce-link.replit.app/api/chat/", {
-            // const response = await fetch("https://07364ac8-408f-4e5c-a5b4-c88a48bc5722-00-1za4yhm008gsr.kirk.replit.dev/api/chat/async", {
+        const agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app/api/chat/";
+        const response = await fetch(agentApiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)

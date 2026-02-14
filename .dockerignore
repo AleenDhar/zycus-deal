@@ -1,0 +1,18 @@
+node_modules
+.next
+.git
+.env.local
+.env
+__pycache__
+*.pyc
+*.pyo
+build
+dist
+.vscode
+.DS_Store
+*.log
+.coverage
+coverage
+.cache
+.pytest_cache
+Agent-Salesforce-Link  # Exclude sub-repo unless needed

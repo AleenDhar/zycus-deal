@@ -502,10 +502,10 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
     };
 
     return (
-        <div className="flex flex-col h-full bg-background relative">
+        <div className="flex flex-col h-full bg-background relative w-full max-w-full overflow-x-hidden">
 
 
-            <div className="flex-1 overflow-y-auto p-2 md:p-4 space-y-4" ref={scrollRef}>
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-4 w-full max-w-full" ref={scrollRef}>
                 {messages.length === 0 && (
                     <div className="flex h-full items-center justify-center text-muted-foreground opacity-50 px-4 text-center">
                         Start a conversation or upload a file...
@@ -518,7 +518,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                 <Bot className="h-3 w-3 md:h-5 md:w-5" />
                             </div>
                         )}
-                        <div className={`rounded-lg p-2.5 md:p-3 max-w-[85%] md:max-w-[75%] lg:max-w-[70%] text-sm md:text-sm overflow-hidden break-words ${msg.role === 'user'
+                        <div className={`rounded-lg p-2.5 md:p-3 min-w-0 max-w-[75%] md:max-w-[75%] lg:max-w-[70%] text-sm md:text-sm overflow-hidden break-words ${msg.role === 'user'
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-foreground'
                             }`}>
@@ -590,9 +590,16 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                         return !match ? (
                                                             <code className="bg-background/20 rounded px-1 break-all" {...props} />
                                                         ) : (
-                                                            <code className="block bg-background/20 p-2 rounded my-2 whitespace-pre-wrap break-words overflow-x-auto max-w-full text-xs md:text-sm" {...props} />
+                                                            <code className="block whitespace-pre-wrap break-words text-xs md:text-sm" {...props} />
                                                         )
                                                     },
+                                                    pre: ({ node, ...props }: any) => (
+                                                        <pre className="bg-background/20 p-2 rounded my-2 overflow-x-auto max-w-full" {...props} />
+                                                    ),
+                                                    img: ({ node, ...props }: any) => (
+                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                        <img className="max-w-full h-auto rounded-lg my-2" {...props} alt={props.alt || "Image"} />
+                                                    ),
                                                     p: ({ node, ...props }: any) => (
                                                         <p className="break-words mb-2 last:mb-0" {...props} />
                                                     ),
@@ -612,7 +619,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                         <blockquote className="border-l-4 border-primary/50 pl-4 py-1 italic bg-muted/50 rounded-r my-2 break-words" {...props} />
                                                     ),
                                                     table: ({ node, ...props }: any) => (
-                                                        <div className="overflow-x-auto my-4 rounded-lg border border-border">
+                                                        <div className="overflow-x-auto my-4 rounded-lg border border-border max-w-full">
                                                             <table className="w-full text-sm text-left border-collapse" {...props} />
                                                         </div>
                                                     ),
@@ -624,6 +631,9 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                     ),
                                                     tr: ({ node, ...props }: any) => (
                                                         <tr className="bg-card hover:bg-muted/50 transition-colors" {...props} />
+                                                    ),
+                                                    hr: ({ node, ...props }: any) => (
+                                                        <hr className="my-4 border-border" {...props} />
                                                     ),
                                                     th: ({ node, ...props }: any) => (
                                                         <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
