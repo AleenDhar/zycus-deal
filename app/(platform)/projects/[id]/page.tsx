@@ -59,16 +59,17 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
     return (
         <div className="flex flex-col gap-8">
-            <div className="flex flex-col gap-2 border-b pb-6">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
+            <div className="flex flex-col gap-4 border-b pb-6">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
+                        <h1 className="text-2xl md:text-3xl font-bold tracking-tight break-words">{project.name}</h1>
                         <VisibilityToggle
                             projectId={project.id}
                             initialVisibility={project.visibility || 'private'}
                             canEdit={isOwner}
                         />
                     </div>
+
                     <form action={async () => {
                         "use server";
                         const { createNewChat } = await import("@/lib/actions/chat");
@@ -77,14 +78,14 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                             const { redirect } = await import("next/navigation");
                             redirect(`/projects/${project.id}/chat/${chatId}`);
                         }
-                    }}>
-                        <Button>
+                    }} className="w-full md:w-auto">
+                        <Button className="w-full md:w-auto">
                             <MessageSquarePlus className="mr-2 h-4 w-4" />
                             New Chat
                         </Button>
                     </form>
                 </div>
-                <p className="text-muted-foreground text-lg">
+                <p className="text-muted-foreground text-sm md:text-lg">
                     {project.description || "No description provided."}
                 </p>
             </div>
