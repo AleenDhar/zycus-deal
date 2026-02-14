@@ -40,6 +40,15 @@ export async function POST(req: NextRequest) {
             throw new Error(`Database Error: ${insertError.message}`);
         }
 
+        // 1.5. Rename Chat if First Message
+        if (!previousMessages || previousMessages.length === 0) {
+            const newTitle = content.slice(0, 50) + (content.length > 50 ? "..." : "");
+            // Fire and forget update
+            supabase.from("chats").update({ title: newTitle }).eq("id", chatId).then(({ error }) => {
+                if (error) console.error("Failed to auto-rename chat:", error);
+            });
+        }
+
         // 2. Get Global Base Prompt
         const { data: basePromptData } = await supabase
             .from("app_config")

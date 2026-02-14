@@ -2,7 +2,7 @@
 
 import { createElement, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/Button";
-import { Send, User, Bot, Paperclip, File as FileIcon, Loader2, Mic, MicOff } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -18,13 +18,18 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
     // Process initial messages (consolidate tokens/events)
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
         if (msg.role === 'user') {
-            acc.push(msg);
+            acc.push({ ...msg });
         } else if (msg.role === 'assistant') {
             const lastMsg = acc[acc.length - 1];
             const type = msg.type || 'message';
 
             // Check if we should append to the last assistant message
             if (lastMsg && lastMsg.role === 'assistant') {
+                // Update the timestamp to the latest message in the sequence
+                if (msg.created_at) {
+                    lastMsg.created_at = msg.created_at;
+                }
+
                 switch (type) {
                     case 'token':
                         lastMsg.content = (lastMsg.content || "") + (msg.content || "");
@@ -144,7 +149,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                             const lastMsg = prev[prev.length - 1];
                             if (lastMsg && lastMsg.role === 'user' && lastMsg.content === newMsg.content && lastMsg.id !== newMsg.id) {
                                 const newMessages = [...prev];
-                                newMessages[prev.length - 1] = { ...lastMsg, id: newMsg.id };
+                                newMessages[prev.length - 1] = { ...lastMsg, id: newMsg.id, created_at: newMsg.created_at };
                                 return newMessages;
                             }
                             if (!prev.some(m => m.id === newMsg.id)) {
@@ -161,17 +166,32 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                             let lastMsg = newMessages[lastMsgIndex];
 
                             if (!lastMsg || lastMsg.role !== 'assistant') {
-                                const placeholder = { role: 'assistant', content: "", thinkingSteps: [], id: newMsg.id, isProcessing: true };
+                                const placeholder = {
+                                    role: 'assistant',
+                                    content: "",
+                                    thinkingSteps: [],
+                                    id: newMsg.id,
+                                    isProcessing: true,
+                                    created_at: newMsg.created_at
+                                };
                                 newMessages.push(placeholder);
                                 lastMsgIndex = newMessages.length - 1;
                                 lastMsg = placeholder;
+                            }
+
+                            // Always update timestamp to latest event
+                            if (newMsg.created_at) {
+                                newMessages[lastMsgIndex] = {
+                                    ...newMessages[lastMsgIndex],
+                                    created_at: newMsg.created_at
+                                };
                             }
 
                             switch (type) {
                                 case 'token':
                                     if (newMsg.content && newMsg.content.length >= (lastMsg.content || "").length) {
                                         newMessages[lastMsgIndex] = {
-                                            ...lastMsg,
+                                            ...newMessages[lastMsgIndex],
                                             content: newMsg.content
                                         };
                                     }
@@ -192,7 +212,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                         const toolInfo = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
 
                                         newMessages[lastMsgIndex] = {
-                                            ...lastMsg,
+                                            ...newMessages[lastMsgIndex],
                                             thinkingSteps: [...(lastMsg.thinkingSteps || []), toolInfo],
                                             isProcessing: true
                                         };
@@ -201,20 +221,20 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                 case 'tool_result':
                                     const resultText = newMsg.content;
                                     newMessages[lastMsgIndex] = {
-                                        ...lastMsg,
+                                        ...newMessages[lastMsgIndex],
                                         thinkingSteps: [...(lastMsg.thinkingSteps || []), `Result: ${resultText}`]
                                     };
                                     break;
                                 case 'thinking':
                                     newMessages[lastMsgIndex] = {
-                                        ...lastMsg,
+                                        ...newMessages[lastMsgIndex],
                                         thinkingSteps: [...(lastMsg.thinkingSteps || []), newMsg.content]
                                     };
                                     break;
                                 case 'status':
                                     setThinkingText(newMsg.content || "Processing...");
                                     newMessages[lastMsgIndex] = {
-                                        ...lastMsg,
+                                        ...newMessages[lastMsgIndex],
                                         status: newMsg.content,
                                         isProcessing: (newMsg.content === 'processing' || newMsg.content === 'started')
                                     };
@@ -225,7 +245,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     break;
                                 case 'final':
                                     newMessages[lastMsgIndex] = {
-                                        ...lastMsg,
+                                        ...newMessages[lastMsgIndex],
                                         content: newMsg.content,
                                         isProcessing: false
                                     };
@@ -233,7 +253,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     break;
                                 case 'error':
                                     newMessages[lastMsgIndex] = {
-                                        ...lastMsg,
+                                        ...newMessages[lastMsgIndex],
                                         content: `Error: ${newMsg.content}`,
                                         isProcessing: false
                                     };
@@ -272,7 +292,8 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         if (!messageContent.trim()) return;
 
         const tempId = crypto.randomUUID();
-        const userMsg = { role: "user", content: messageContent, id: tempId };
+        // Add created_at timestamp
+        const userMsg = { role: "user", content: messageContent, id: tempId, created_at: new Date().toISOString() };
         setMessages(prev => [...prev, userMsg]);
         setInput("");
         setLoading(true);
@@ -285,7 +306,8 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             content: "",
             id: assistantMsgId,
             thinkingSteps: [],
-            isProcessing: true
+            isProcessing: true,
+            created_at: new Date().toISOString()
         }]);
 
         try {
@@ -337,11 +359,14 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     // Ensure we are updating the assistant message
                                     if (!lastMsg || lastMsg.role !== 'assistant') return prev;
 
+                                    // Update timestamp to now as we receive chunks
+                                    newMessages[lastMsgIndex].created_at = new Date().toISOString();
+
                                     if (data.type === 'token' || data.type === 'content') {
                                         const text = data.content || data.token || "";
                                         // If content is just appended
                                         newMessages[lastMsgIndex] = {
-                                            ...lastMsg,
+                                            ...newMessages[lastMsgIndex],
                                             content: (lastMsg.content || "") + text
                                         };
                                     } else if (data.type === 'tool_call') {
@@ -356,19 +381,19 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                         const toolInfo = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
 
                                         newMessages[lastMsgIndex] = {
-                                            ...lastMsg,
+                                            ...newMessages[lastMsgIndex],
                                             thinkingSteps: [...(lastMsg.thinkingSteps || []), toolInfo],
                                             isProcessing: true
                                         };
                                     } else if (data.type === 'tool_result') {
                                         const resultText = data.content;
                                         newMessages[lastMsgIndex] = {
-                                            ...lastMsg,
+                                            ...newMessages[lastMsgIndex],
                                             thinkingSteps: [...(lastMsg.thinkingSteps || []), `Result: ${resultText}`]
                                         };
                                     } else if (data.type === 'thinking') {
                                         newMessages[lastMsgIndex] = {
-                                            ...lastMsg,
+                                            ...newMessages[lastMsgIndex],
                                             thinkingSteps: [...(lastMsg.thinkingSteps || []), data.content]
                                         };
                                     } else if (data.type === 'status') {
@@ -501,41 +526,51 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         }
     };
 
+    const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+    const handleCopy = (text: string, index: number) => {
+        navigator.clipboard.writeText(text);
+        setCopiedIndex(index);
+        setTimeout(() => setCopiedIndex(null), 2000);
+    };
+
     return (
-        <div className="flex flex-col h-full bg-background relative w-full max-w-full overflow-x-hidden">
+        <div className="flex flex-col h-full bg-background relative w-full max-w-screen overflow-x-hidden">
 
 
-            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-4 w-full max-w-full" ref={scrollRef}>
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-6 w-full max-w-screen" ref={scrollRef}>
                 {messages.length === 0 && (
-                    <div className="flex h-full items-center justify-center text-muted-foreground opacity-50 px-4 text-center">
-                        Start a conversation or upload a file...
+                    <div className="flex h-full items-center justify-center text-muted-foreground opacity-50 px-4 text-center flex-col gap-2">
+                        <div className="p-4 rounded-full bg-muted/50">
+                            <Bot className="h-8 w-8" />
+                        </div>
+                        <p>How can I help you today?</p>
                     </div>
                 )}
                 {messages.map((msg, i) => (
-                    <div key={i} className={`flex gap-2 md:gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div key={i} className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         {msg.role === 'assistant' && (
-                            <div className="h-6 w-6 md:h-8 md:w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
-                                <Bot className="h-3 w-3 md:h-5 md:w-5" />
+                            <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
+                                <Bot className="h-5 w-5" />
                             </div>
                         )}
-                        <div className={`rounded-lg p-2.5 md:p-3 min-w-0 max-w-[75%] md:max-w-[75%] lg:max-w-[70%] text-sm md:text-sm overflow-hidden break-words ${msg.role === 'user'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted text-foreground'
-                            }`}>
+                        <div className={`flex flex-col gap-2 max-w-[85%] md:max-w-[80%] min-w-0 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                             {msg.role === 'user' ? (
-                                <div className="whitespace-pre-wrap">
-                                    {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
-                                        const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
-                                        if (match) {
-                                            return (
-                                                <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 flex items-center gap-1">
-                                                    <FileIcon className="h-4 w-4" />
-                                                    {match[1]}
-                                                </a>
-                                            );
-                                        }
-                                        return part;
-                                    })}
+                                <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm md:text-base break-words shadow-sm">
+                                    <div className="whitespace-pre-wrap">
+                                        {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
+                                            const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
+                                            if (match) {
+                                                return (
+                                                    <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 flex items-center gap-1 bg-white/10 p-1 rounded">
+                                                        <FileIcon className="h-4 w-4" />
+                                                        {match[1]}
+                                                    </a>
+                                                );
+                                            }
+                                            return part;
+                                        })}
+                                    </div>
                                 </div>
                             ) : (() => {
                                 const rawContent = msg.content || "";
@@ -565,14 +600,14 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                 }
 
                                 return (
-                                    <div className="flex flex-col gap-2 min-w-0 max-w-full">
+                                    <div className="w-full text-foreground/90 text-sm md:text-base leading-relaxed">
                                         {thinkingContent && (
-                                            <details className="group bg-black/5 rounded-md border border-border/50 overflow-hidden">
-                                                <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-black/5 flex items-center select-none list-none">
-                                                    <span className="mr-2 opacity-50 transition-transform group-open:rotate-90">▶</span>
-                                                    Thinking Process
+                                            <details className="group mb-4">
+                                                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground/80 flex items-center select-none list-none gap-2 transition-colors">
+                                                    <span className="opacity-70 transition-transform group-open:rotate-90">›</span>
+                                                    Thought for a few seconds
                                                 </summary>
-                                                <div className="px-3 py-2 border-t border-border/50 text-xs text-muted-foreground font-mono whitespace-pre-wrap break-all bg-black/5 max-h-[300px] overflow-y-auto">
+                                                <div className="mt-2 pl-3 border-l-2 border-border/50 text-xs text-muted-foreground/80 whitespace-pre-wrap">
                                                     {thinkingContent}
                                                 </div>
                                             </details>
@@ -588,35 +623,35 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                             return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
                                                         }
                                                         return !match ? (
-                                                            <code className="bg-background/20 rounded px-1 break-all" {...props} />
+                                                            <code className="bg-muted px-1.5 py-0.5 rounded text-[0.9em] font-mono" {...props} />
                                                         ) : (
-                                                            <code className="block whitespace-pre-wrap break-words text-xs md:text-sm" {...props} />
+                                                            <code className="block font-mono text-xs md:text-sm" {...props} />
                                                         )
                                                     },
                                                     pre: ({ node, ...props }: any) => (
-                                                        <pre className="bg-background/20 p-2 rounded my-2 overflow-x-auto max-w-full" {...props} />
+                                                        <pre className="bg-muted/50 p-4 rounded-lg my-3 overflow-x-auto border border-border/50" {...props} />
                                                     ),
                                                     img: ({ node, ...props }: any) => (
                                                         // eslint-disable-next-line @next/next/no-img-element
-                                                        <img className="max-w-full h-auto rounded-lg my-2" {...props} alt={props.alt || "Image"} />
+                                                        <img className="max-w-full h-auto rounded-lg my-3 border border-border/50 shadow-sm" {...props} alt={props.alt || "Image"} />
                                                     ),
                                                     p: ({ node, ...props }: any) => (
-                                                        <p className="break-words mb-2 last:mb-0" {...props} />
+                                                        <p className="mb-3 last:mb-0 leading-7" {...props} />
                                                     ),
                                                     a: ({ node, ...props }: any) => (
-                                                        <a className="text-primary underline hover:opacity-80 break-all" target="_blank" rel="noopener noreferrer" {...props} />
+                                                        <a className="text-primary font-medium hover:underline underline-offset-4" target="_blank" rel="noopener noreferrer" {...props} />
                                                     ),
                                                     ul: ({ node, ...props }: any) => (
-                                                        <ul className="list-disc pl-4 mb-2 space-y-1" {...props} />
+                                                        <ul className="list-disc pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
                                                     ),
                                                     ol: ({ node, ...props }: any) => (
-                                                        <ol className="list-decimal pl-4 mb-2 space-y-1" {...props} />
+                                                        <ol className="list-decimal pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
                                                     ),
                                                     li: ({ node, ...props }: any) => (
-                                                        <li className="break-words" {...props} />
+                                                        <li className="pl-1" {...props} />
                                                     ),
                                                     blockquote: ({ node, ...props }: any) => (
-                                                        <blockquote className="border-l-4 border-primary/50 pl-4 py-1 italic bg-muted/50 rounded-r my-2 break-words" {...props} />
+                                                        <blockquote className="border-l-4 border-primary/20 pl-4 py-1 italic text-muted-foreground my-4" {...props} />
                                                     ),
                                                     table: ({ node, ...props }: any) => (
                                                         <div className="overflow-x-auto my-4 rounded-lg border border-border max-w-full">
@@ -624,19 +659,19 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                         </div>
                                                     ),
                                                     thead: ({ node, ...props }: any) => (
-                                                        <thead className="bg-muted text-muted-foreground uppercase text-xs" {...props} />
+                                                        <thead className="bg-muted text-muted-foreground uppercase text-xs tracking-wider" {...props} />
                                                     ),
                                                     tbody: ({ node, ...props }: any) => (
-                                                        <tbody className="divide-y divide-border" {...props} />
+                                                        <tbody className="divide-y divide-border/50" {...props} />
                                                     ),
                                                     tr: ({ node, ...props }: any) => (
-                                                        <tr className="bg-card hover:bg-muted/50 transition-colors" {...props} />
-                                                    ),
-                                                    hr: ({ node, ...props }: any) => (
-                                                        <hr className="my-4 border-border" {...props} />
+                                                        <tr className="bg-card/50 hover:bg-muted/50 transition-colors" {...props} />
                                                     ),
                                                     th: ({ node, ...props }: any) => (
                                                         <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
+                                                    ),
+                                                    hr: ({ node, ...props }: any) => (
+                                                        <hr className="my-6 border-border/50" {...props} />
                                                     ),
                                                     td: ({ node, ...props }: any) => (
                                                         <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
@@ -648,80 +683,144 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                         )}
 
                                         {(msg.isProcessing || (loading && i === messages.length - 1)) && (
-                                            <div className="flex items-center gap-2 mt-2 text-muted-foreground">
-                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                <span className="text-xs">{thinkingText || "Processing..."}</span>
+                                            <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
+                                                <span className="h-2 w-2 rounded-full bg-primary/50"></span>
+                                                <span className="text-xs">{thinkingText || "Thinking..."}</span>
+                                            </div>
+                                        )}
+
+                                        {!msg.isProcessing && msg.role === 'assistant' && (
+                                            <div className="flex items-center gap-1 mt-4 border-t border-border/50 pt-2 opacity-80">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                    onClick={() => handleCopy(displayContent, i)}
+                                                    title="Copy response"
+                                                >
+                                                    {copiedIndex === i ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                >
+                                                    <ThumbsUp className="h-4 w-4" />
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                >
+                                                    <ThumbsDown className="h-4 w-4" />
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                >
+                                                    <RotateCcw className="h-4 w-4" />
+                                                </Button>
+                                                <div className="flex-1" />
+                                                {(function () {
+                                                    // Calculate time difference
+                                                    let duration = null;
+                                                    if (i > 0) {
+                                                        const prevMsg = messages[i - 1];
+                                                        if (prevMsg.role === 'user' && prevMsg.created_at && msg.created_at) {
+                                                            const start = new Date(prevMsg.created_at).getTime();
+                                                            const end = new Date(msg.created_at).getTime();
+                                                            const diff = (end - start) / 1000;
+                                                            if (diff > 0) {
+                                                                duration = diff < 1 ? "<1s" : `${diff.toFixed(1)}s`;
+                                                            }
+                                                        }
+                                                    }
+                                                    return duration ? (
+                                                        <span className="text-xs text-muted-foreground ml-1 tabular-nums">
+                                                            generated in {duration}
+                                                        </span>
+                                                    ) : null;
+                                                })()}
                                             </div>
                                         )}
                                     </div>
                                 );
                             })()}
                         </div>
-                        {msg.role === 'user' && (
-                            <div className="h-6 w-6 md:h-8 md:w-8 rounded-full bg-secondary flex items-center justify-center shadow-sm flex-shrink-0">
-                                <User className="h-3 w-3 md:h-4 md:w-4" />
-                            </div>
-                        )}
                     </div>
                 ))}
 
-                {loading && messages.length > 0 && messages[messages.length - 1].role !== 'assistant' && (
-                    <div className="flex gap-2 md:gap-3 justify-start items-center">
-                        <div className="h-6 w-6 md:h-8 md:w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
-                            <Bot className="h-3 w-3 md:h-5 md:w-5" />
-                        </div>
-                        <div className="bg-muted p-3 rounded-lg">
-                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        </div>
-                    </div>
-                )}
+                <div className="h-4" /> {/* Spacer */}
             </div>
 
-            <div className="p-2 md:p-4 border-t bg-card flex gap-2 items-center w-full max-w-full">
-                <input
-                    type="file"
-                    ref={fileInputRef}
-                    className="hidden"
-                    onChange={handleFileUpload}
-                    accept=".pdf,.csv,.xls,.xlsx,.txt,image/*"
-                />
-                <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={loading || uploading}
-                    className="h-8 w-8 md:h-10 md:w-10 shrink-0"
-                >
-                    {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-                </Button>
+            <div className="p-4 bg-background w-full max-w-screen flex justify-center pb-6">
+                <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all">
+                    <textarea
+                        className="w-full bg-transparent border-none rounded-2xl pl-20 pr-12 py-3 md:py-4 text-sm md:text-base focus:outline-none resize-none min-h-[56px] max-h-[200px] overflow-y-auto"
+                        placeholder="Send a message to the model..."
+                        value={input}
+                        onChange={(e) => {
+                            setInput(e.target.value);
+                            e.target.style.height = 'auto';
+                            e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
+                        disabled={loading}
+                        rows={1}
+                    />
 
-                <Button
-                    variant={isRecording ? "destructive" : "outline"}
-                    size="icon"
-                    onClick={toggleVoiceInput}
-                    disabled={loading}
-                    className={`h-8 w-8 md:h-10 md:w-10 shrink-0 ${isRecording ? "animate-pulse" : ""}`}
-                >
-                    {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                </Button>
+                    <div className="absolute bottom-2 left-2 flex gap-1">
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            className="hidden"
+                            onChange={handleFileUpload}
+                            accept=".pdf,.csv,.xls,.xlsx,.txt,image/*"
+                        />
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={loading || uploading}
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-background/50 rounded-lg"
+                        >
+                            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={toggleVoiceInput}
+                            disabled={loading}
+                            className={`h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-background/50 rounded-lg ${isRecording ? "text-destructive" : ""}`}
+                        >
+                            {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                        </Button>
+                    </div>
 
-                <input
-                    className="flex-1 bg-background border rounded-md px-3 py-2 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-primary min-w-0"
-                    placeholder={isRecording ? "Listening..." : "Type a message..."}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                    disabled={loading}
-                />
-
-                <Button
-                    onClick={() => handleSend()}
-                    disabled={loading || !input.trim()}
-                    size="icon"
-                    className="h-8 w-8 md:h-10 md:w-10 shrink-0"
-                >
-                    <Send className="h-4 w-4" />
-                </Button>
+                    <div className="absolute bottom-2 right-2">
+                        <Button
+                            onClick={() => handleSend()}
+                            disabled={loading || !input.trim()}
+                            size="icon"
+                            className={`h-8 w-8 rounded-lg transition-all ${loading
+                                ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                                : "bg-primary hover:bg-primary/90 text-primary-foreground"
+                                }`}
+                        >
+                            {loading ? (
+                                <span className="h-3 w-3 bg-current rounded-sm" />
+                            ) : (
+                                <Send className="h-4 w-4" />
+                            )}
+                        </Button>
+                    </div>
+                </div>
             </div>
         </div>
     );

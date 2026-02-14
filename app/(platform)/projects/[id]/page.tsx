@@ -94,7 +94,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
                 <div className="md:col-span-2 space-y-6">
                     <h2 className="text-xl font-semibold">Conversations</h2>
                     {chats && chats.length > 0 ? (
-                        <div className="grid gap-3 w-full max-w-screen overflow-x-hidden">
+                        <div className="grid gap-3 w-full max-w-screen overflow-x-hidden max-h-[400px] overflow-y-auto p-1">
                             {chats.map((chat: { id: string; title: string; created_at: string }) => (
                                 <Link key={chat.id} href={`/projects/${project.id}/chat/${chat.id}`}>
                                     <div className="border rounded-xl hover:bg-accent/50 transition-colors p-4 block">

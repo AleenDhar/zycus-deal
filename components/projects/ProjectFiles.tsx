@@ -105,7 +105,7 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
             </div>
 
             {files && files.length > 0 ? (
-                <div className="grid gap-3">
+                <div className="grid gap-3 max-h-[300px] overflow-y-auto p-1">
                     {files.map((doc: any) => (
                         <Card key={doc.id} className="p-4 hover:bg-accent/50 transition-colors">
                             <div className="flex items-center justify-between">
@@ -114,7 +114,7 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
                                         <FileText className="h-5 w-5" />
                                     </div>
                                     <div>
-                                        <h4 className="font-medium text-sm">{doc.name}</h4>
+                                        <h4 className="font-medium text-sm break-all">{doc.name}</h4>
                                         <p className="text-xs text-muted-foreground">
                                             {new Date(doc.created_at).toLocaleDateString()}
                                         </p>
@@ -123,7 +123,7 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="text-muted-foreground hover:text-destructive"
+                                    className="text-muted-foreground hover:text-destructive shrink-0"
                                     onClick={() => handleDelete(doc.id, doc.file_path)}
                                 >
                                     <Trash2 className="h-4 w-4" />
