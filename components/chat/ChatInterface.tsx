@@ -167,68 +167,77 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
 
                         // 2. Handle Assistant Messages - Update UI when DB is updated
                         if (newMsg.role === 'assistant') {
+                            console.log("[Realtime] Received assistant message from DB:", { id: newMsg.id, contentLen: newMsg.content?.length, type: newMsg.type });
+
+                            // Skip intermediate messages (thinking, tool_call, tool_result)
+                            // These are logged separately in the backend and should not appear as UI messages
+                            const messageType = newMsg.type || 'message';
+                            if (messageType === 'thinking' || messageType === 'tool_call' || messageType === 'tool_result') {
+                                console.log("[Realtime] Skipping intermediate message type:", messageType);
+                                return prev;
+                            }
+
                             // Check if existing message matches ID
                             const existingIndex = prev.findIndex(m => m.id === newMsg.id);
 
                             if (existingIndex !== -1) {
+                                console.log("[Realtime] Found existing message by ID at index", existingIndex);
                                 // Update existing message content from DB authoritative source
                                 const existing = newMessages[existingIndex];
-                                // Only update if content changed or it's a meaningful update
                                 if (existing.content !== newMsg.content || existing.created_at !== newMsg.created_at) {
                                     newMessages[existingIndex] = {
                                         ...existing,
                                         content: newMsg.content,
                                         created_at: newMsg.created_at,
-                                        isProcessing: false // Assume DB commit means finalized or authoritative update
+                                        isProcessing: false
                                     };
+                                    console.log("[Realtime] Updated existing message");
                                     return newMessages;
                                 }
                                 return prev;
                             }
 
-                            // If not found by ID, reconcile with ANY pending processing message (searching backwards)
-                            // This handles the case where the stream died (creating a placeholder) and the DB insert comes later.
-                            let pendingIndex = -1;
+                            // NO ID MATCH - This is the critical case where backend finished after timeout
+                            console.log("[Realtime] No ID match found, searching for pending assistant message...");
+                            console.log("[Realtime] Current messages:", prev.map((m, i) => ({
+                                index: i,
+                                role: m.role,
+                                id: m.id,
+                                isProcessing: m.isProcessing,
+                                hasContent: !!m.content,
+                                contentLen: m.content?.length
+                            })));
+
+                            // Find the LAST assistant message (regardless of state)
+                            let lastAssistantIndex = -1;
                             for (let i = newMessages.length - 1; i >= 0; i--) {
-                                if (newMessages[i].role === 'assistant' && newMessages[i].isProcessing) {
-                                    pendingIndex = i;
+                                if (newMessages[i].role === 'assistant') {
+                                    lastAssistantIndex = i;
                                     break;
                                 }
                             }
 
-                            // Also backward search for stuck placeholders (processing=false but empty content, if distinct from above)
-                            if (pendingIndex === -1) {
-                                for (let i = newMessages.length - 1; i >= 0; i--) {
-                                    const m = newMessages[i];
-                                    if (m.role === 'assistant' && !m.content && m.thinkingSteps && m.thinkingSteps.length >= 0) {
-                                        // This might be a stuck placeholder
-                                        pendingIndex = i;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if (pendingIndex !== -1) {
-                                const targetMsg = newMessages[pendingIndex];
-                                console.log("[Realtime] Reconciling pending message index", pendingIndex, "with DB update", newMsg.id);
-                                newMessages[pendingIndex] = {
+                            if (lastAssistantIndex !== -1) {
+                                const targetMsg = newMessages[lastAssistantIndex];
+                                console.log("[Realtime] Found last assistant message at index", lastAssistantIndex, "- Updating with DB content");
+                                newMessages[lastAssistantIndex] = {
                                     ...targetMsg,
                                     id: newMsg.id,
                                     content: newMsg.content,
                                     created_at: newMsg.created_at,
                                     isProcessing: false
                                 };
+                                console.log("[Realtime] Successfully reconciled!");
                                 return newMessages;
                             }
 
-                            // New message context
-                            if (!prev.some(m => m.id === newMsg.id)) {
-                                return [...prev, {
-                                    ...newMsg,
-                                    thinkingSteps: [],
-                                    isProcessing: false
-                                }];
-                            }
+                            // If somehow there's no assistant message at all, append it
+                            console.log("[Realtime] No assistant message found, appending new one");
+                            return [...prev, {
+                                ...newMsg,
+                                thinkingSteps: [],
+                                isProcessing: false
+                            }];
                         }
 
                         return prev;
@@ -237,16 +246,81 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             )
             .subscribe((status) => {
                 console.log(`[Realtime] Subscription status for chat:${chatId}:`, status);
-                if (status === 'SUBSCRIBED') setRealtimeStatus('connected');
-                else if (status === 'CHANNEL_ERROR') setRealtimeStatus('error');
-                else if (status === 'TIMED_OUT') setRealtimeStatus('error');
-                else if (status === 'CLOSED') setRealtimeStatus('disconnected');
+                if (status === 'SUBSCRIBED') {
+                    setRealtimeStatus('connected');
+                    console.log('[Realtime] Successfully connected');
+                } else if (status === 'CHANNEL_ERROR') {
+                    setRealtimeStatus('error');
+                    console.error('[Realtime] Channel error - connection failed');
+                } else if (status === 'TIMED_OUT') {
+                    setRealtimeStatus('error');
+                    console.warn('[Realtime] Connection timed out - this may be a WebSocket connectivity issue');
+                    console.warn('[Realtime] Check: 1) Network connection 2) Firewall settings 3) Supabase project status');
+                } else if (status === 'CLOSED') {
+                    setRealtimeStatus('disconnected');
+                    console.log('[Realtime] Connection closed');
+                }
             });
 
         return () => {
+            console.log(`[Realtime] Cleaning up subscription for chat:${chatId}`);
             supabase.removeChannel(channel);
         };
     }, [chatId, supabase]);
+
+    // Polling fallback when Realtime fails
+    useEffect(() => {
+        if (!chatId) return;
+        if (realtimeStatus === 'connected') return; // Only poll if Realtime is not working
+
+        console.log('[Polling] Realtime not connected, starting polling fallback');
+        const interval = setInterval(async () => {
+            // Check if there are any processing messages
+            const processingMsg = messages.find(m => m.role === 'assistant' && m.isProcessing);
+            if (!processingMsg) {
+                return; // Nothing to poll for
+            }
+
+            console.log('[Polling] Checking for updates...');
+            const { data, error } = await supabase
+                .from('chat_messages')
+                .select('*')
+                .eq('chat_id', chatId)
+                .eq('role', 'assistant')
+                .or('type.eq.message,type.eq.final,type.is.null') // Only fetch final messages, not thinking steps
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (error) {
+                console.error('[Polling] Error fetching messages:', error);
+                return;
+            }
+
+            if (data && data.content) {
+                console.log('[Polling] Found completed message from DB, updating UI');
+                setMessages(prev => {
+                    const lastAssistantIndex = prev.findIndex(m => m.role === 'assistant' && m.isProcessing);
+                    if (lastAssistantIndex === -1) return prev;
+
+                    const updated = [...prev];
+                    updated[lastAssistantIndex] = {
+                        ...updated[lastAssistantIndex],
+                        id: data.id,
+                        content: data.content,
+                        created_at: data.created_at,
+                        isProcessing: false
+                    };
+                    return updated;
+                });
+            }
+        }, 3000); // Poll every 3 seconds
+
+        return () => {
+            console.log('[Polling] Stopping polling fallback');
+            clearInterval(interval);
+        };
+    }, [chatId, realtimeStatus, messages, supabase]);
 
     const handleSend = async (messageContent: string = input) => {
         if (!messageContent.trim()) return;
@@ -586,8 +660,10 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                                     <span className="opacity-70 transition-transform group-open:rotate-90">›</span>
                                                     Thought for a few seconds
                                                 </summary>
-                                                <div className="mt-2 pl-3 border-l-2 border-border/50 text-xs text-muted-foreground/80 whitespace-pre-wrap">
-                                                    {thinkingContent}
+                                                <div className="mt-2 pl-3 border-l-2 border-border/50 text-xs text-muted-foreground/80 overflow-hidden">
+                                                    <div className="whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full">
+                                                        {thinkingContent}
+                                                    </div>
                                                 </div>
                                             </details>
                                         )}
