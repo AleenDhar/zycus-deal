@@ -48,7 +48,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     const newMsg = {
                         ...msg,
                         thinkingSteps: type === 'thinking' ? [msg.content] : [],
-                        isProcessing: false,
+                        isProcessing: true, // Default to processing until we see a final message
                         content: ""
                     };
                     acc.push(newMsg);
@@ -63,6 +63,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     lastMsg.content = msg.content || "";
                     lastMsg.id = msg.id;
                     lastMsg.created_at = msg.created_at;
+                    lastMsg.isProcessing = false; // Mark as done!
                 } else {
                     // New assistant message
                     acc.push({
@@ -161,11 +162,47 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         if (newMsg.role === 'assistant') {
                             console.log("[Realtime] Received assistant message from DB:", { id: newMsg.id, contentLen: newMsg.content?.length, type: newMsg.type });
 
-                            // Skip intermediate messages (thinking, tool_call, tool_result, status)
-                            // These are logged separately in the backend and should not appear as UI messages
                             const messageType = newMsg.type || 'message';
-                            if (messageType === 'thinking' || messageType === 'tool_call' || messageType === 'tool_result' || messageType === 'status') {
-                                console.log("[Realtime] Skipping intermediate message type:", messageType);
+
+                            // Finds the last assistant message to update
+                            const findLastAssistantIndex = (msgs: any[]) => {
+                                for (let i = msgs.length - 1; i >= 0; i--) {
+                                    if (msgs[i].role === 'assistant') return i;
+                                }
+                                return -1;
+                            };
+
+                            // Handle intermediate types by updating the last assistant message
+                            if (messageType === 'thinking' || messageType === 'tool_call' || messageType === 'tool_result') {
+                                return prev.map((msg, index, array) => {
+                                    if (index !== findLastAssistantIndex(array)) return msg;
+
+                                    let newStep = "";
+                                    if (messageType === 'thinking') {
+                                        newStep = newMsg.content;
+                                    } else if (messageType === 'tool_call') {
+                                        let args = "";
+                                        const meta = newMsg.metadata || {};
+                                        const rawArgs = newMsg.args || meta.args || {};
+                                        try {
+                                            args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
+                                        } catch (e) { args = JSON.stringify(rawArgs); }
+                                        const toolName = newMsg.tool || meta.tool || meta.name || "Unknown Tool";
+                                        newStep = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
+                                    } else if (messageType === 'tool_result') {
+                                        newStep = `Result: ${newMsg.content}`;
+                                    }
+
+                                    return {
+                                        ...msg,
+                                        thinkingSteps: [...(msg.thinkingSteps || []), newStep],
+                                        // Ensure it stays processing until final message
+                                        isProcessing: true,
+                                        // Update ID if we need to track it, though usually we stay with the placeholder ID until final
+                                    };
+                                });
+                            } else if (messageType === 'status') {
+                                // Just update loading text
                                 return prev;
                             }
 
@@ -179,45 +216,39 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                 if (existing.content !== newMsg.content || existing.created_at !== newMsg.created_at) {
                                     newMessages[existingIndex] = {
                                         ...existing,
-                                        content: newMsg.content,
+                                        content: newMsg.content || existing.content,
                                         created_at: newMsg.created_at,
                                         isProcessing: false
                                     };
                                     console.log("[Realtime] Updated existing message");
+
+                                    // Stop loading indicator when final response arrives
+                                    if (messageType === 'final') {
+                                        setLoading(false);
+                                        setThinkingText("");
+                                    }
+
                                     return newMessages;
                                 }
                                 return prev;
                             }
 
-                            // NO ID MATCH - This is the critical case where backend finished after timeout
-                            console.log("[Realtime] No ID match found, searching for pending assistant message...");
-                            console.log("[Realtime] Current messages:", prev.map((m, i) => ({
-                                index: i,
-                                role: m.role,
-                                id: m.id,
-                                isProcessing: m.isProcessing,
-                                hasContent: !!m.content,
-                                contentLen: m.content?.length
-                            })));
-
-                            // Find the LAST assistant message (regardless of state)
-                            let lastAssistantIndex = -1;
-                            for (let i = newMessages.length - 1; i >= 0; i--) {
-                                if (newMessages[i].role === 'assistant') {
-                                    lastAssistantIndex = i;
-                                    break;
-                                }
-                            }
+                            // NO ID MATCH - likely the placeholder needs to be updated with the real message
+                            const lastAssistantIndex = findLastAssistantIndex(prev);
 
                             if (lastAssistantIndex !== -1) {
                                 const targetMsg = newMessages[lastAssistantIndex];
+                                // Only update if the target is processing or has no ID mismatch (though logic here is tricky)
+                                // We assume the last assistant message IS the one we want to replace with the Realtime Update
+
                                 console.log("[Realtime] Found last assistant message at index", lastAssistantIndex, "- Updating with DB content");
                                 newMessages[lastAssistantIndex] = {
                                     ...targetMsg,
                                     id: newMsg.id,
-                                    content: newMsg.content,
+                                    content: newMsg.content || targetMsg.content, // Keep existing content if new is empty (unlikely for final)
                                     created_at: newMsg.created_at,
-                                    isProcessing: false
+                                    isProcessing: messageType !== 'final', // Only stop processing if it's final
+                                    thinkingSteps: targetMsg.thinkingSteps // Preserve thinking steps we built up
                                 };
                                 console.log("[Realtime] Successfully reconciled!");
 
@@ -601,9 +632,9 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                 )}
                 {messages
                     .filter(msg => {
-                        // Hide assistant messages that are processing with no content
-                        // They'll show up as just "Thinking..." indicator, not an empty bubble
-                        if (msg.role === 'assistant' && msg.isProcessing && !msg.content?.trim()) {
+                        // Hide assistant messages that are processing with no content AND no thinking steps
+                        // If they have thinking steps, we want to show them so the user can see the progress
+                        if (msg.role === 'assistant' && msg.isProcessing && !msg.content?.trim() && (!msg.thinkingSteps || msg.thinkingSteps.length === 0)) {
                             return false;
                         }
                         return true;
@@ -647,13 +678,17 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                         thinkingContent = msg.thinkingSteps.join("\n\n");
                                     }
 
+                                    // Hack to handle raw stringified Python/JSON objects from backend
                                     let displayContent = mainContent;
-                                    if (mainContent.trim().startsWith("[") && mainContent.includes("'type': 'text'")) {
+                                    if (mainContent.trim().startsWith("[")) {
                                         try {
-                                            const textMatch = mainContent.match(/'text':\s*'((?:[^'\\]|\\.)*)'/);
-                                            if (textMatch && textMatch[1]) {
-                                                displayContent = textMatch[1]
+                                            // Try to find the text content block
+                                            // Matches: 'text': '...' OR 'text': "..."
+                                            const textMatch = mainContent.match(/'text':\s*(['"])((?:[^\\]|\\.)*?)\1/);
+                                            if (textMatch && textMatch[2]) {
+                                                displayContent = textMatch[2]
                                                     .replace(/\\n/g, '\n')
+                                                    .replace(/\\"/g, '"')
                                                     .replace(/\\'/g, "'")
                                                     .replace(/\\\\/g, "\\");
                                             }
@@ -814,18 +849,26 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         </div>
                     ))}
 
-                {/* Global "Thinking..." indicator when processing */}
-                {loading && (
-                    <div className="flex gap-4 mx-auto w-full max-w-3xl justify-start">
-                        <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
-                            <Bot className="h-5 w-5" />
+                {/* Global "Thinking..." indicator - only show if we don't have a visible assistant message yet */}
+                {loading && (() => {
+                    const lastMsg = messages[messages.length - 1];
+                    const isLastMsgVisible = lastMsg && lastMsg.role === 'assistant' &&
+                        (lastMsg.content?.trim() || (lastMsg.thinkingSteps && lastMsg.thinkingSteps.length > 0));
+
+                    if (isLastMsgVisible) return null;
+
+                    return (
+                        <div className="flex gap-4 mx-auto w-full max-w-3xl justify-start">
+                            <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
+                                <Bot className="h-5 w-5" />
+                            </div>
+                            <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
+                                <span className="h-2 w-2 rounded-full bg-primary/50"></span>
+                                <span className="text-xs">{thinkingText || "Thinking..."}</span>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
-                            <span className="h-2 w-2 rounded-full bg-primary/50"></span>
-                            <span className="text-xs">{thinkingText || "Thinking..."}</span>
-                        </div>
-                    </div>
-                )}
+                    );
+                })()}
 
                 <div className="h-4" /> {/* Spacer */}
             </div>
