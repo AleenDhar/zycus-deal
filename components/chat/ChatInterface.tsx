@@ -136,21 +136,28 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             .on(
                 'postgres_changes',
                 {
-                    event: 'INSERT',
+                    event: '*',
                     schema: 'public',
                     table: 'chat_messages',
                     filter: `chat_id=eq.${chatId}`
                 },
                 (payload: any) => {
                     const newMsg = payload.new;
+                    if (!newMsg) return;
+
                     setMessages(prev => {
+                        const newMessages = [...prev];
+                        const lastMsgIndex = newMessages.length - 1;
+                        const lastMsg = newMessages[lastMsgIndex];
+
                         // 1. Handle User Messages (Deduplication)
                         if (newMsg.role === 'user') {
-                            const lastMsg = prev[prev.length - 1];
-                            if (lastMsg && lastMsg.role === 'user' && lastMsg.content === newMsg.content && lastMsg.id !== newMsg.id) {
-                                const newMessages = [...prev];
-                                newMessages[prev.length - 1] = { ...lastMsg, id: newMsg.id, created_at: newMsg.created_at };
-                                return newMessages;
+                            if (lastMsg && lastMsg.role === 'user' && lastMsg.content === newMsg.content) {
+                                if (lastMsg.id !== newMsg.id) {
+                                    newMessages[lastMsgIndex] = { ...lastMsg, id: newMsg.id, created_at: newMsg.created_at };
+                                    return newMessages;
+                                }
+                                return prev;
                             }
                             if (!prev.some(m => m.id === newMsg.id)) {
                                 return [...prev, newMsg];
@@ -158,119 +165,72 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                             return prev;
                         }
 
-                        // 2. Handle Assistant Events
+                        // 2. Handle Assistant Messages - Update UI when DB is updated
                         if (newMsg.role === 'assistant') {
-                            const type = newMsg.type || 'message';
-                            const newMessages = [...prev];
-                            let lastMsgIndex = newMessages.length - 1;
-                            let lastMsg = newMessages[lastMsgIndex];
+                            // Check if existing message matches ID
+                            const existingIndex = prev.findIndex(m => m.id === newMsg.id);
 
-                            if (!lastMsg || lastMsg.role !== 'assistant') {
-                                const placeholder = {
-                                    role: 'assistant',
-                                    content: "",
-                                    thinkingSteps: [],
-                                    id: newMsg.id,
-                                    isProcessing: true,
-                                    created_at: newMsg.created_at
-                                };
-                                newMessages.push(placeholder);
-                                lastMsgIndex = newMessages.length - 1;
-                                lastMsg = placeholder;
-                            }
-
-                            // Always update timestamp to latest event
-                            if (newMsg.created_at) {
-                                newMessages[lastMsgIndex] = {
-                                    ...newMessages[lastMsgIndex],
-                                    created_at: newMsg.created_at
-                                };
-                            }
-
-                            switch (type) {
-                                case 'token':
-                                    if (newMsg.content && newMsg.content.length >= (lastMsg.content || "").length) {
-                                        newMessages[lastMsgIndex] = {
-                                            ...newMessages[lastMsgIndex],
-                                            content: newMsg.content
-                                        };
-                                    }
-                                    break;
-                                case 'tool_call':
-                                    let args = "";
-                                    if (newMsg.metadata) {
-                                        let meta = newMsg.metadata;
-                                        if (typeof meta === 'string') {
-                                            try { meta = JSON.parse(meta); } catch (e) { }
-                                        }
-                                        const rawArgs = meta.args || {};
-                                        try {
-                                            args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
-                                        } catch (e) { args = JSON.stringify(rawArgs); }
-
-                                        const toolName = meta.tool || meta.name || "Unknown Tool";
-                                        const toolInfo = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
-
-                                        newMessages[lastMsgIndex] = {
-                                            ...newMessages[lastMsgIndex],
-                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), toolInfo],
-                                            isProcessing: true
-                                        };
-                                    }
-                                    break;
-                                case 'tool_result':
-                                    const resultText = newMsg.content;
-                                    newMessages[lastMsgIndex] = {
-                                        ...newMessages[lastMsgIndex],
-                                        thinkingSteps: [...(lastMsg.thinkingSteps || []), `Result: ${resultText}`]
-                                    };
-                                    break;
-                                case 'thinking':
-                                    newMessages[lastMsgIndex] = {
-                                        ...newMessages[lastMsgIndex],
-                                        thinkingSteps: [...(lastMsg.thinkingSteps || []), newMsg.content]
-                                    };
-                                    break;
-                                case 'status':
-                                    setThinkingText(newMsg.content || "Processing...");
-                                    newMessages[lastMsgIndex] = {
-                                        ...newMessages[lastMsgIndex],
-                                        status: newMsg.content,
-                                        isProcessing: (newMsg.content === 'processing' || newMsg.content === 'started')
-                                    };
-                                    if (newMsg.content === 'done' || newMsg.content === 'completed') {
-                                        newMessages[lastMsgIndex].isProcessing = false;
-                                        setLoading(false);
-                                    }
-                                    break;
-                                case 'final':
-                                    newMessages[lastMsgIndex] = {
-                                        ...newMessages[lastMsgIndex],
+                            if (existingIndex !== -1) {
+                                // Update existing message content from DB authoritative source
+                                const existing = newMessages[existingIndex];
+                                // Only update if content changed or it's a meaningful update
+                                if (existing.content !== newMsg.content || existing.created_at !== newMsg.created_at) {
+                                    newMessages[existingIndex] = {
+                                        ...existing,
                                         content: newMsg.content,
-                                        isProcessing: false
+                                        created_at: newMsg.created_at,
+                                        isProcessing: false // Assume DB commit means finalized or authoritative update
                                     };
-                                    setLoading(false);
-                                    break;
-                                case 'error':
-                                    newMessages[lastMsgIndex] = {
-                                        ...newMessages[lastMsgIndex],
-                                        content: `Error: ${newMsg.content}`,
-                                        isProcessing: false
-                                    };
-                                    setLoading(false);
-                                    break;
-                                default:
-                                    if (newMsg.content) {
-                                        const current = lastMsg.content || "";
-                                        if (newMsg.content.startsWith(current)) {
-                                            newMessages[lastMsgIndex].content = newMsg.content;
-                                        } else {
-                                            newMessages[lastMsgIndex].content = current + newMsg.content;
-                                        }
-                                    }
+                                    return newMessages;
+                                }
+                                return prev;
                             }
-                            return newMessages;
+
+                            // If not found by ID, reconcile with ANY pending processing message (searching backwards)
+                            // This handles the case where the stream died (creating a placeholder) and the DB insert comes later.
+                            let pendingIndex = -1;
+                            for (let i = newMessages.length - 1; i >= 0; i--) {
+                                if (newMessages[i].role === 'assistant' && newMessages[i].isProcessing) {
+                                    pendingIndex = i;
+                                    break;
+                                }
+                            }
+
+                            // Also backward search for stuck placeholders (processing=false but empty content, if distinct from above)
+                            if (pendingIndex === -1) {
+                                for (let i = newMessages.length - 1; i >= 0; i--) {
+                                    const m = newMessages[i];
+                                    if (m.role === 'assistant' && !m.content && m.thinkingSteps && m.thinkingSteps.length >= 0) {
+                                        // This might be a stuck placeholder
+                                        pendingIndex = i;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (pendingIndex !== -1) {
+                                const targetMsg = newMessages[pendingIndex];
+                                console.log("[Realtime] Reconciling pending message index", pendingIndex, "with DB update", newMsg.id);
+                                newMessages[pendingIndex] = {
+                                    ...targetMsg,
+                                    id: newMsg.id,
+                                    content: newMsg.content,
+                                    created_at: newMsg.created_at,
+                                    isProcessing: false
+                                };
+                                return newMessages;
+                            }
+
+                            // New message context
+                            if (!prev.some(m => m.id === newMsg.id)) {
+                                return [...prev, {
+                                    ...newMsg,
+                                    thinkingSteps: [],
+                                    isProcessing: false
+                                }];
+                            }
                         }
+
                         return prev;
                     });
                 }
@@ -423,8 +383,27 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             setLoading(false);
 
         } catch (e: any) {
-            console.error(e);
-            setMessages(prev => [...prev, { role: "assistant", content: `Error: ${e.message || "Failed to start chat."}` }]);
+            console.error("Chat Error:", e);
+            setMessages(prev => {
+                // If we have a pending message, mark it as waiting for the background process instead of showing a hard error
+                // This allows the Realtime subscription to eventually pick up the result
+                const last = prev[prev.length - 1];
+                if (last && last.role === 'assistant' && last.isProcessing) {
+                    const newPrev = [...prev];
+                    newPrev[newPrev.length - 1] = {
+                        ...last,
+                        content: (last.content || "") + `\n\n*[System Warning]: Connection timed out, but the agent is still working in the background. The response will appear here automatically when complete.*`,
+                        // Keep isProcessing true so the pending finder in Realtime can locate it
+                    };
+                    return newPrev;
+                }
+                // Only if no message was processing do we append a new error
+                return [...prev, { role: "assistant", content: `Error: ${e.message || "Failed to start chat."}` }];
+            });
+            // We do NOT set loading to false if we believe the background agent is working, 
+            // but the timeout forces us to stop the local spinner logic.
+            // Actually, keep loading true might be confusing if the stream is dead.
+            // Let's set loading false, but the "isProcessing" flag on the message determines the specific UI processing state.
             setLoading(false);
         }
     };
