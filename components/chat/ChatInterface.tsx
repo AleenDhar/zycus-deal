@@ -2,7 +2,7 @@
 
 import { createElement, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -53,8 +53,14 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     };
                     acc.push(newMsg);
                 }
-            } else if (type === 'status') {
-                // Skip status messages entirely
+            } else if (type === 'status' || type === 'cancelled') {
+                if (type === 'cancelled' || msg.content === 'cancelled') {
+                    if (lastMsg && lastMsg.role === 'assistant') {
+                        lastMsg.content = (lastMsg.content || "") + "\n\n*[Task Cancelled]*";
+                        lastMsg.isProcessing = false;
+                    }
+                }
+                // Skip status messages from being added as new bubbles
                 return acc;
             } else if (type === 'final' || type === 'message') {
                 // Final or regular message - add it
@@ -113,12 +119,19 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
 
         if (lastUserIndex === -1) return; // No user messages
 
-        // Check if there's a final response after this user message
+        // Check if there's a final response OR CANCELLATION after this user message
         const hasFinalResponse = initialMessages
             .slice(lastUserIndex + 1)
-            .some(m => m.role === 'assistant' && (m.type === 'final' || m.type === 'message'));
+            .some(m => {
+                if (m.role === 'assistant') {
+                    if (m.type === 'final' || m.type === 'message') return true;
+                    // Check for cancellation
+                    if ((m.type === 'status' && m.content === 'cancelled') || m.type === 'cancelled' || m.content === 'cancelled') return true;
+                }
+                return false;
+            });
 
-        // If no final response, agent is still thinking
+        // If no final response and not cancelled, agent is still thinking
         if (!hasFinalResponse) {
             setLoading(true);
             setThinkingText("Thinking...");
@@ -202,8 +215,31 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     };
                                 });
                             } else if (messageType === 'status') {
-                                // Just update loading text
+                                if (newMsg.content === 'cancelled') {
+                                    setLoading(false);
+                                    setThinkingText("");
+                                    return prev.map((msg, index, array) => {
+                                        if (index !== findLastAssistantIndex(array)) return msg;
+                                        return {
+                                            ...msg,
+                                            content: (msg.content || "") + "\n\n*[Task Cancelled]*",
+                                            isProcessing: false
+                                        };
+                                    });
+                                }
+                                setThinkingText(newMsg.content || "Processing...");
                                 return prev;
+                            } else if (messageType === 'cancelled') {
+                                setLoading(false);
+                                setThinkingText("");
+                                return prev.map((msg, index, array) => {
+                                    if (index !== findLastAssistantIndex(array)) return msg;
+                                    return {
+                                        ...msg,
+                                        content: (msg.content || "") + "\n\n*[Task Cancelled]*",
+                                        isProcessing: false
+                                    };
+                                });
                             }
 
                             // Check if existing message matches ID
@@ -471,6 +507,11 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     } else if (data.type === 'error') {
                                         newMessages[lastMsgIndex].content += `\n\nError: ${data.content}`;
                                         newMessages[lastMsgIndex].isProcessing = false;
+                                    } else if (data.type === 'cancelled') {
+                                        setLoading(false);
+                                        setThinkingText("");
+                                        newMessages[lastMsgIndex].content = (newMessages[lastMsgIndex].content || "") + "\n\n*[Task Cancelled]*";
+                                        newMessages[lastMsgIndex].isProcessing = false;
                                     }
 
                                     return newMessages;
@@ -509,6 +550,55 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             // Actually, keep loading true might be confusing if the stream is dead.
             // Let's set loading false, but the "isProcessing" flag on the message determines the specific UI processing state.
             setLoading(false);
+        }
+    };
+
+    const handleStop = async () => {
+        if (!chatId) return;
+
+        console.log("Stopping chat:", chatId);
+        // Optimistic UI update - show we are stopping
+        setThinkingText("Stopping...");
+
+        try {
+            const res = await fetch('/api/chat/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chatId })
+            });
+
+            if (res.ok) {
+                // Determine success - force UI stop
+                setLoading(false);
+                setThinkingText("");
+
+                // Manually mark last assistant message as cancelled in UI if needed
+                setMessages(prev => {
+                    let lastIdx = -1;
+                    for (let i = prev.length - 1; i >= 0; i--) {
+                        if (prev[i].role === 'assistant') {
+                            lastIdx = i;
+                            break;
+                        }
+                    }
+                    if (lastIdx === -1) return prev;
+
+                    const msg = prev[lastIdx];
+                    // Only update if not already marked
+                    if (msg.content?.includes("[Task Cancelled]")) return prev;
+
+                    const newMessages = [...prev];
+                    newMessages[lastIdx] = {
+                        ...msg,
+                        content: (msg.content || "") + "\n\n*[Task Cancelled]*",
+                        isProcessing: false
+                    };
+                    return newMessages;
+                });
+            }
+        } catch (e) {
+            console.error("Error stopping chat:", e);
+            setThinkingText("Failed to stop");
         }
     };
 
@@ -924,16 +1014,17 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
 
                     <div className="absolute bottom-2 right-2">
                         <Button
-                            onClick={() => handleSend()}
-                            disabled={loading || !input.trim()}
+                            onClick={() => loading ? handleStop() : handleSend()}
+                            disabled={!loading && !input.trim()}
                             size="icon"
                             className={`h-8 w-8 rounded-lg transition-all ${loading
                                 ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
                                 : "bg-primary hover:bg-primary/90 text-primary-foreground"
                                 }`}
+                            title={loading ? "Stop generating" : "Send message"}
                         >
                             {loading ? (
-                                <span className="h-3 w-3 bg-current rounded-sm" />
+                                <Square className="h-4 w-4 fill-current" />
                             ) : (
                                 <Send className="h-4 w-4" />
                             )}
