@@ -15,26 +15,23 @@ interface ChatProps {
 }
 
 export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps) {
-    // Process initial messages (consolidate tokens/events)
+    // Process initial messages - group thinking/tool steps with final messages
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
+        const type = msg.type || 'message';
+
         if (msg.role === 'user') {
+            // Always add user messages
             acc.push({ ...msg });
         } else if (msg.role === 'assistant') {
             const lastMsg = acc[acc.length - 1];
-            const type = msg.type || 'message';
 
-            // Check if we should append to the last assistant message
-            if (lastMsg && lastMsg.role === 'assistant') {
-                // Update the timestamp to the latest message in the sequence
-                if (msg.created_at) {
-                    lastMsg.created_at = msg.created_at;
-                }
-
-                switch (type) {
-                    case 'token':
-                        lastMsg.content = (lastMsg.content || "") + (msg.content || "");
-                        break;
-                    case 'tool_call':
+            // If this is a thinking/tool message, attach it to the last assistant message
+            if (type === 'thinking' || type === 'tool_call' || type === 'tool_result') {
+                if (lastMsg && lastMsg.role === 'assistant') {
+                    // Add to existing assistant message's thinking steps
+                    if (type === 'thinking') {
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), msg.content];
+                    } else if (type === 'tool_call') {
                         let args = "";
                         if (msg.metadata && msg.metadata.args) {
                             try {
@@ -43,59 +40,38 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         }
                         const toolInfo = `Called **${msg.metadata?.tool || msg.metadata?.name || "Unknown Tool"}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
                         lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), toolInfo];
-                        break;
-                    case 'tool_result':
+                    } else if (type === 'tool_result') {
                         lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), `Result: ${msg.content}`];
-                        break;
-                    case 'thinking':
-                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), msg.content];
-                        break;
-                    case 'final':
-                        if (msg.content && msg.content.length > (lastMsg.content || "").length) {
-                            lastMsg.content = msg.content;
-                        }
-                        lastMsg.isProcessing = false;
-                        break;
-                    case 'status':
-                        lastMsg.status = msg.content;
-                        if (msg.content === 'processing' || msg.content === 'started') {
-                            lastMsg.isProcessing = true;
-                        } else {
-                            lastMsg.isProcessing = false;
-                        }
-                        break;
-                    case 'error':
-                        lastMsg.content = `Error: ${msg.content}`;
-                        lastMsg.isProcessing = false;
-                        break;
-                    default:
-                        if (type === 'message' && msg.content) lastMsg.content = (lastMsg.content || "") + msg.content;
-                }
-            } else {
-                // New assistant block
-                const newMsg = { ...msg, thinkingSteps: [], isProcessing: false, content: "" };
-
-                if (type === 'token') {
-                    newMsg.content = msg.content || "";
-                } else if (type === 'tool_call') {
-                    let args = "";
-                    if (msg.metadata && msg.metadata.args) {
-                        try {
-                            args = typeof msg.metadata.args === 'string' ? msg.metadata.args : JSON.stringify(msg.metadata.args, null, 2);
-                        } catch (e) { args = JSON.stringify(msg.metadata.args); }
                     }
-                    newMsg.thinkingSteps = [`Called **${msg.metadata?.tool || msg.metadata?.name || "Unknown Tool"}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`];
-                    newMsg.isProcessing = true;
-                } else if (type === 'thinking') {
-                    newMsg.thinkingSteps = [msg.content];
-                    newMsg.isProcessing = true;
-                } else if (type === 'status') {
-                    newMsg.status = msg.content;
-                    newMsg.isProcessing = (msg.content === 'processing' || msg.content === 'started');
-                } else if (type === 'message') {
-                    newMsg.content = msg.content || "";
+                } else {
+                    // No assistant message to attach to - create a placeholder
+                    const newMsg = {
+                        ...msg,
+                        thinkingSteps: type === 'thinking' ? [msg.content] : [],
+                        isProcessing: false,
+                        content: ""
+                    };
+                    acc.push(newMsg);
                 }
-                acc.push(newMsg);
+            } else if (type === 'status') {
+                // Skip status messages entirely
+                return acc;
+            } else if (type === 'final' || type === 'message') {
+                // Final or regular message - add it
+                if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
+                    // Merge with existing empty assistant message (from thinking steps)
+                    lastMsg.content = msg.content || "";
+                    lastMsg.id = msg.id;
+                    lastMsg.created_at = msg.created_at;
+                } else {
+                    // New assistant message
+                    acc.push({
+                        ...msg,
+                        thinkingSteps: [],
+                        isProcessing: false,
+                        content: msg.content || ""
+                    });
+                }
             }
         }
         return acc;
@@ -122,6 +98,31 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages, loading]);
+
+    // Check if there's a pending message on initial load
+    useEffect(() => {
+        // Find the last user message
+        let lastUserIndex = -1;
+        for (let i = initialMessages.length - 1; i >= 0; i--) {
+            if (initialMessages[i].role === 'user') {
+                lastUserIndex = i;
+                break;
+            }
+        }
+
+        if (lastUserIndex === -1) return; // No user messages
+
+        // Check if there's a final response after this user message
+        const hasFinalResponse = initialMessages
+            .slice(lastUserIndex + 1)
+            .some(m => m.role === 'assistant' && (m.type === 'final' || m.type === 'message'));
+
+        // If no final response, agent is still thinking
+        if (!hasFinalResponse) {
+            setLoading(true);
+            setThinkingText("Thinking...");
+        }
+    }, []); // Only run on mount
 
     // Realtime Subscription
     useEffect(() => {
@@ -150,18 +151,9 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         const lastMsgIndex = newMessages.length - 1;
                         const lastMsg = newMessages[lastMsgIndex];
 
-                        // 1. Handle User Messages (Deduplication)
+                        // 1. Skip User Messages - they are added optimistically on send
                         if (newMsg.role === 'user') {
-                            if (lastMsg && lastMsg.role === 'user' && lastMsg.content === newMsg.content) {
-                                if (lastMsg.id !== newMsg.id) {
-                                    newMessages[lastMsgIndex] = { ...lastMsg, id: newMsg.id, created_at: newMsg.created_at };
-                                    return newMessages;
-                                }
-                                return prev;
-                            }
-                            if (!prev.some(m => m.id === newMsg.id)) {
-                                return [...prev, newMsg];
-                            }
+                            console.log('[Realtime] Ignoring user message from DB (already added optimistically)');
                             return prev;
                         }
 
@@ -169,10 +161,10 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         if (newMsg.role === 'assistant') {
                             console.log("[Realtime] Received assistant message from DB:", { id: newMsg.id, contentLen: newMsg.content?.length, type: newMsg.type });
 
-                            // Skip intermediate messages (thinking, tool_call, tool_result)
+                            // Skip intermediate messages (thinking, tool_call, tool_result, status)
                             // These are logged separately in the backend and should not appear as UI messages
                             const messageType = newMsg.type || 'message';
-                            if (messageType === 'thinking' || messageType === 'tool_call' || messageType === 'tool_result') {
+                            if (messageType === 'thinking' || messageType === 'tool_call' || messageType === 'tool_result' || messageType === 'status') {
                                 console.log("[Realtime] Skipping intermediate message type:", messageType);
                                 return prev;
                             }
@@ -228,6 +220,13 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                                     isProcessing: false
                                 };
                                 console.log("[Realtime] Successfully reconciled!");
+
+                                // Stop loading indicator when final response arrives
+                                if (messageType === 'final') {
+                                    setLoading(false);
+                                    setThinkingText("");
+                                }
+
                                 return newMessages;
                             }
 
@@ -600,211 +599,233 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         <p>How can I help you today?</p>
                     </div>
                 )}
-                {messages.map((msg, i) => (
-                    <div key={i} className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        {msg.role === 'assistant' && (
-                            <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
-                                <Bot className="h-5 w-5" />
-                            </div>
-                        )}
-                        <div className={`flex flex-col gap-2 max-w-[85%] md:max-w-[80%] min-w-0 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                            {msg.role === 'user' ? (
-                                <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm md:text-base break-words shadow-sm">
-                                    <div className="whitespace-pre-wrap">
-                                        {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
-                                            const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
-                                            if (match) {
-                                                return (
-                                                    <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 flex items-center gap-1 bg-white/10 p-1 rounded">
-                                                        <FileIcon className="h-4 w-4" />
-                                                        {match[1]}
-                                                    </a>
-                                                );
-                                            }
-                                            return part;
-                                        })}
-                                    </div>
+                {messages
+                    .filter(msg => {
+                        // Hide assistant messages that are processing with no content
+                        // They'll show up as just "Thinking..." indicator, not an empty bubble
+                        if (msg.role === 'assistant' && msg.isProcessing && !msg.content?.trim()) {
+                            return false;
+                        }
+                        return true;
+                    })
+                    .map((msg, i) => (
+                        <div key={i} className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            {msg.role === 'assistant' && (
+                                <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
+                                    <Bot className="h-5 w-5" />
                                 </div>
-                            ) : (() => {
-                                const rawContent = msg.content || "";
-                                let thinkingContent = "";
-                                let mainContent = rawContent;
+                            )}
+                            <div className={`flex flex-col gap-2 max-w-[85%] md:max-w-[80%] min-w-0 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                {msg.role === 'user' ? (
+                                    <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm md:text-base break-words shadow-sm">
+                                        <div className="whitespace-pre-wrap">
+                                            {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
+                                                const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
+                                                if (match) {
+                                                    return (
+                                                        <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 flex items-center gap-1 bg-white/10 p-1 rounded">
+                                                            <FileIcon className="h-4 w-4" />
+                                                            {match[1]}
+                                                        </a>
+                                                    );
+                                                }
+                                                return part;
+                                            })}
+                                        </div>
+                                    </div>
+                                ) : (() => {
+                                    const rawContent = msg.content || "";
+                                    let thinkingContent = "";
+                                    let mainContent = rawContent;
 
-                                if (rawContent.includes("### Thinking Process") && rawContent.includes("### Answer")) {
-                                    const parts = rawContent.split("### Answer");
-                                    thinkingContent = parts[0].replace("### Thinking Process", "").trim();
-                                    mainContent = parts.slice(1).join("### Answer").trim();
-                                }
-                                else if (msg.thinkingSteps && msg.thinkingSteps.length > 0) {
-                                    thinkingContent = msg.thinkingSteps.join("\n\n");
-                                }
+                                    if (rawContent.includes("### Thinking Process") && rawContent.includes("### Answer")) {
+                                        const parts = rawContent.split("### Answer");
+                                        thinkingContent = parts[0].replace("### Thinking Process", "").trim();
+                                        mainContent = parts.slice(1).join("### Answer").trim();
+                                    }
+                                    else if (msg.thinkingSteps && msg.thinkingSteps.length > 0) {
+                                        thinkingContent = msg.thinkingSteps.join("\n\n");
+                                    }
 
-                                let displayContent = mainContent;
-                                if (mainContent.trim().startsWith("[") && mainContent.includes("'type': 'text'")) {
-                                    try {
-                                        const textMatch = mainContent.match(/'text':\s*'((?:[^'\\]|\\.)*)'/);
-                                        if (textMatch && textMatch[1]) {
-                                            displayContent = textMatch[1]
-                                                .replace(/\\n/g, '\n')
-                                                .replace(/\\'/g, "'")
-                                                .replace(/\\\\/g, "\\");
-                                        }
-                                    } catch (e) { }
-                                }
+                                    let displayContent = mainContent;
+                                    if (mainContent.trim().startsWith("[") && mainContent.includes("'type': 'text'")) {
+                                        try {
+                                            const textMatch = mainContent.match(/'text':\s*'((?:[^'\\]|\\.)*)'/);
+                                            if (textMatch && textMatch[1]) {
+                                                displayContent = textMatch[1]
+                                                    .replace(/\\n/g, '\n')
+                                                    .replace(/\\'/g, "'")
+                                                    .replace(/\\\\/g, "\\");
+                                            }
+                                        } catch (e) { }
+                                    }
 
-                                return (
-                                    <div className="w-full text-foreground/90 text-sm md:text-base leading-relaxed">
-                                        {thinkingContent && (
-                                            <details className="group mb-4">
-                                                <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground/80 flex items-center select-none list-none gap-2 transition-colors">
-                                                    <span className="opacity-70 transition-transform group-open:rotate-90">›</span>
-                                                    Thought for a few seconds
-                                                </summary>
-                                                <div className="mt-2 pl-3 border-l-2 border-border/50 text-xs text-muted-foreground/80 overflow-hidden">
-                                                    <div className="whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full">
-                                                        {thinkingContent}
-                                                    </div>
-                                                </div>
-                                            </details>
-                                        )}
-
-                                        {displayContent && (
-                                            <ReactMarkdown
-                                                remarkPlugins={[remarkGfm]}
-                                                components={{
-                                                    code: ({ node, ...props }: any) => {
-                                                        const match = /language-(\w+)/.exec((props.className || ''))
-                                                        if (match && match[1] === 'chart') {
-                                                            return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
-                                                        }
-                                                        return !match ? (
-                                                            <code className="bg-muted px-1.5 py-0.5 rounded text-[0.9em] font-mono" {...props} />
-                                                        ) : (
-                                                            <code className="block font-mono text-xs md:text-sm" {...props} />
-                                                        )
-                                                    },
-                                                    pre: ({ node, ...props }: any) => (
-                                                        <pre className="bg-muted/50 p-4 rounded-lg my-3 overflow-x-auto border border-border/50" {...props} />
-                                                    ),
-                                                    img: ({ node, ...props }: any) => (
-                                                        // eslint-disable-next-line @next/next/no-img-element
-                                                        <img className="max-w-full h-auto rounded-lg my-3 border border-border/50 shadow-sm" {...props} alt={props.alt || "Image"} />
-                                                    ),
-                                                    p: ({ node, ...props }: any) => (
-                                                        <p className="mb-3 last:mb-0 leading-7" {...props} />
-                                                    ),
-                                                    a: ({ node, ...props }: any) => (
-                                                        <a className="text-primary font-medium hover:underline underline-offset-4" target="_blank" rel="noopener noreferrer" {...props} />
-                                                    ),
-                                                    ul: ({ node, ...props }: any) => (
-                                                        <ul className="list-disc pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
-                                                    ),
-                                                    ol: ({ node, ...props }: any) => (
-                                                        <ol className="list-decimal pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
-                                                    ),
-                                                    li: ({ node, ...props }: any) => (
-                                                        <li className="pl-1" {...props} />
-                                                    ),
-                                                    blockquote: ({ node, ...props }: any) => (
-                                                        <blockquote className="border-l-4 border-primary/20 pl-4 py-1 italic text-muted-foreground my-4" {...props} />
-                                                    ),
-                                                    table: ({ node, ...props }: any) => (
-                                                        <div className="overflow-x-auto my-4 rounded-lg border border-border max-w-full">
-                                                            <table className="w-full text-sm text-left border-collapse" {...props} />
+                                    return (
+                                        <div className="w-full text-foreground/90 text-sm md:text-base leading-relaxed">
+                                            {thinkingContent && (
+                                                <details className="group mb-4">
+                                                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground/80 flex items-center select-none list-none gap-2 transition-colors">
+                                                        <span className="opacity-70 transition-transform group-open:rotate-90">›</span>
+                                                        Thought for a few seconds
+                                                    </summary>
+                                                    <div className="mt-2 pl-3 border-l-2 border-border/50 text-xs text-muted-foreground/80 overflow-hidden">
+                                                        <div className="whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full">
+                                                            {thinkingContent}
                                                         </div>
-                                                    ),
-                                                    thead: ({ node, ...props }: any) => (
-                                                        <thead className="bg-muted text-muted-foreground uppercase text-xs tracking-wider" {...props} />
-                                                    ),
-                                                    tbody: ({ node, ...props }: any) => (
-                                                        <tbody className="divide-y divide-border/50" {...props} />
-                                                    ),
-                                                    tr: ({ node, ...props }: any) => (
-                                                        <tr className="bg-card/50 hover:bg-muted/50 transition-colors" {...props} />
-                                                    ),
-                                                    th: ({ node, ...props }: any) => (
-                                                        <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
-                                                    ),
-                                                    hr: ({ node, ...props }: any) => (
-                                                        <hr className="my-6 border-border/50" {...props} />
-                                                    ),
-                                                    td: ({ node, ...props }: any) => (
-                                                        <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
-                                                    )
-                                                }}
-                                            >
-                                                {displayContent}
-                                            </ReactMarkdown>
-                                        )}
+                                                    </div>
+                                                </details>
+                                            )}
 
-                                        {(msg.isProcessing || (loading && i === messages.length - 1)) && (
-                                            <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
-                                                <span className="h-2 w-2 rounded-full bg-primary/50"></span>
-                                                <span className="text-xs">{thinkingText || "Thinking..."}</span>
-                                            </div>
-                                        )}
+                                            {displayContent && (
+                                                <ReactMarkdown
+                                                    remarkPlugins={[remarkGfm]}
+                                                    components={{
+                                                        code: ({ node, ...props }: any) => {
+                                                            const match = /language-(\w+)/.exec((props.className || ''))
+                                                            if (match && match[1] === 'chart') {
+                                                                return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
+                                                            }
+                                                            return !match ? (
+                                                                <code className="bg-muted px-1.5 py-0.5 rounded text-[0.9em] font-mono" {...props} />
+                                                            ) : (
+                                                                <code className="block font-mono text-xs md:text-sm" {...props} />
+                                                            )
+                                                        },
+                                                        pre: ({ node, ...props }: any) => (
+                                                            <pre className="bg-muted/50 p-4 rounded-lg my-3 overflow-x-auto border border-border/50" {...props} />
+                                                        ),
+                                                        img: ({ node, ...props }: any) => (
+                                                            // eslint-disable-next-line @next/next/no-img-element
+                                                            <img className="max-w-full h-auto rounded-lg my-3 border border-border/50 shadow-sm" {...props} alt={props.alt || "Image"} />
+                                                        ),
+                                                        p: ({ node, ...props }: any) => (
+                                                            <p className="mb-3 last:mb-0 leading-7" {...props} />
+                                                        ),
+                                                        a: ({ node, ...props }: any) => (
+                                                            <a className="text-primary font-medium hover:underline underline-offset-4" target="_blank" rel="noopener noreferrer" {...props} />
+                                                        ),
+                                                        ul: ({ node, ...props }: any) => (
+                                                            <ul className="list-disc pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
+                                                        ),
+                                                        ol: ({ node, ...props }: any) => (
+                                                            <ol className="list-decimal pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
+                                                        ),
+                                                        li: ({ node, ...props }: any) => (
+                                                            <li className="pl-1" {...props} />
+                                                        ),
+                                                        blockquote: ({ node, ...props }: any) => (
+                                                            <blockquote className="border-l-4 border-primary/20 pl-4 py-1 italic text-muted-foreground my-4" {...props} />
+                                                        ),
+                                                        table: ({ node, ...props }: any) => (
+                                                            <div className="overflow-x-auto my-4 rounded-lg border border-border max-w-full">
+                                                                <table className="w-full text-sm text-left border-collapse" {...props} />
+                                                            </div>
+                                                        ),
+                                                        thead: ({ node, ...props }: any) => (
+                                                            <thead className="bg-muted text-muted-foreground uppercase text-xs tracking-wider" {...props} />
+                                                        ),
+                                                        tbody: ({ node, ...props }: any) => (
+                                                            <tbody className="divide-y divide-border/50" {...props} />
+                                                        ),
+                                                        tr: ({ node, ...props }: any) => (
+                                                            <tr className="bg-card/50 hover:bg-muted/50 transition-colors" {...props} />
+                                                        ),
+                                                        th: ({ node, ...props }: any) => (
+                                                            <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
+                                                        ),
+                                                        hr: ({ node, ...props }: any) => (
+                                                            <hr className="my-6 border-border/50" {...props} />
+                                                        ),
+                                                        td: ({ node, ...props }: any) => (
+                                                            <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
+                                                        )
+                                                    }}
+                                                >
+                                                    {displayContent}
+                                                </ReactMarkdown>
+                                            )}
 
-                                        {!msg.isProcessing && msg.role === 'assistant' && (
-                                            <div className="flex items-center gap-1 mt-4 border-t border-border/50 pt-2 opacity-80">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
-                                                    onClick={() => handleCopy(displayContent, i)}
-                                                    title="Copy response"
-                                                >
-                                                    {copiedIndex === i ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
-                                                >
-                                                    <ThumbsUp className="h-4 w-4" />
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
-                                                >
-                                                    <ThumbsDown className="h-4 w-4" />
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
-                                                >
-                                                    <RotateCcw className="h-4 w-4" />
-                                                </Button>
-                                                <div className="flex-1" />
-                                                {(function () {
-                                                    // Calculate time difference
-                                                    let duration = null;
-                                                    if (i > 0) {
-                                                        const prevMsg = messages[i - 1];
-                                                        if (prevMsg.role === 'user' && prevMsg.created_at && msg.created_at) {
-                                                            const start = new Date(prevMsg.created_at).getTime();
-                                                            const end = new Date(msg.created_at).getTime();
-                                                            const diff = (end - start) / 1000;
-                                                            if (diff > 0) {
-                                                                duration = diff < 1 ? "<1s" : `${diff.toFixed(1)}s`;
+                                            {(msg.isProcessing || (loading && i === messages.length - 1)) && (
+                                                <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
+                                                    <span className="h-2 w-2 rounded-full bg-primary/50"></span>
+                                                    <span className="text-xs">{thinkingText || "Thinking..."}</span>
+                                                </div>
+                                            )}
+
+                                            {!msg.isProcessing && msg.role === 'assistant' && (
+                                                <div className="flex items-center gap-1 mt-4 border-t border-border/50 pt-2 opacity-80">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                        onClick={() => handleCopy(displayContent, i)}
+                                                        title="Copy response"
+                                                    >
+                                                        {copiedIndex === i ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                    >
+                                                        <ThumbsUp className="h-4 w-4" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                    >
+                                                        <ThumbsDown className="h-4 w-4" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                    >
+                                                        <RotateCcw className="h-4 w-4" />
+                                                    </Button>
+                                                    <div className="flex-1" />
+                                                    {(function () {
+                                                        // Calculate time difference
+                                                        let duration = null;
+                                                        if (i > 0) {
+                                                            const prevMsg = messages[i - 1];
+                                                            if (prevMsg.role === 'user' && prevMsg.created_at && msg.created_at) {
+                                                                const start = new Date(prevMsg.created_at).getTime();
+                                                                const end = new Date(msg.created_at).getTime();
+                                                                const diff = (end - start) / 1000;
+                                                                if (diff > 0) {
+                                                                    duration = diff < 1 ? "<1s" : `${diff.toFixed(1)}s`;
+                                                                }
                                                             }
                                                         }
-                                                    }
-                                                    return duration ? (
-                                                        <span className="text-xs text-muted-foreground ml-1 tabular-nums">
-                                                            generated in {duration}
-                                                        </span>
-                                                    ) : null;
-                                                })()}
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })()}
+                                                        return duration ? (
+                                                            <span className="text-xs text-muted-foreground ml-1 tabular-nums">
+                                                                generated in {duration}
+                                                            </span>
+                                                        ) : null;
+                                                    })()}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                        </div>
+                    ))}
+
+                {/* Global "Thinking..." indicator when processing */}
+                {loading && (
+                    <div className="flex gap-4 mx-auto w-full max-w-3xl justify-start">
+                        <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
+                            <Bot className="h-5 w-5" />
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
+                            <span className="h-2 w-2 rounded-full bg-primary/50"></span>
+                            <span className="text-xs">{thinkingText || "Thinking..."}</span>
                         </div>
                     </div>
-                ))}
+                )}
 
                 <div className="h-4" /> {/* Spacer */}
             </div>
