@@ -984,7 +984,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         rows={1}
                     />
 
-                    <div className="absolute bottom-2 left-2 flex gap-1">
+                    <div className="absolute bottom-3 left-2 flex gap-1">
                         <input
                             type="file"
                             ref={fileInputRef}
@@ -1012,7 +1012,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         </Button>
                     </div>
 
-                    <div className="absolute bottom-2 right-2">
+                    <div className="absolute bottom-3 right-2">
                         <Button
                             onClick={() => loading ? handleStop() : handleSend()}
                             disabled={!loading && !input.trim()}
