@@ -714,33 +714,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         <div className="flex flex-col h-full bg-background relative w-full max-w-screen overflow-x-hidden">
 
 
-            <div className="flex items-center justify-between px-4 py-2 border-b bg-background/95 backdrop-blur z-10 sticky top-0">
-                <div className="text-sm font-medium flex items-center gap-2">
-                    <Bot className="h-4 w-4 text-primary" />
-                    Assistant
-                </div>
-                <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" className="gap-2 h-8 text-muted-foreground hover:text-foreground">
-                            {model === "openai:gpt-5" && "ChatGPT (GPT-5)"}
-                            {model === "google:gemini-1.5-pro" && "Gemini 3 Pro (High)"}
-                            {model === "anthropic:claude-3-5-sonnet" && "Anthropic (Claude 3.5)"}
-                            <ChevronDown className="h-3 w-3 opacity-50" />
-                        </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setModel("openai:gpt-5")}>
-                            ChatGPT (GPT-5)
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setModel("google:gemini-1.5-pro")}>
-                            Gemini 3 Pro (High)
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setModel("anthropic:claude-3-5-sonnet")}>
-                            Anthropic (Claude 3.5)
-                        </DropdownMenuItem>
-                    </DropdownMenuContent>
-                </DropdownMenu>
-            </div>
+
 
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-6 w-full max-w-screen" ref={scrollRef}>
                 {messages.length === 0 && (
