@@ -1,5 +1,6 @@
-import { verifyAdmin, getBasePrompt, getAllUsers } from "@/lib/actions/admin";
+import { verifyAdmin, getBasePrompt, getAllUsers, getApiKeys } from "@/lib/actions/admin";
 import { PromptEditor } from "@/components/admin/PromptEditor";
+import { ApiKeyList } from "@/components/admin/ApiKeyList";
 import { UserList } from "@/components/admin/UserList";
 import { redirect } from "next/navigation";
 
@@ -13,6 +14,7 @@ export default async function AdminPage() {
     }
 
     const basePrompt = await getBasePrompt();
+    const apiKeys = await getApiKeys();
     const users = await getAllUsers();
 
     return (
@@ -21,6 +23,10 @@ export default async function AdminPage() {
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
                 <PromptEditor initialPrompt={basePrompt} />
+            </section>
+
+            <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
+                <ApiKeyList initialKeys={apiKeys} />
             </section>
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">

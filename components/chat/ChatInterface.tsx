@@ -2,11 +2,12 @@
 
 import { createElement, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChartRenderer } from "@/components/chat/ChartRenderer";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 interface ChatProps {
     projectId: string;
@@ -92,6 +93,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
     const [thinkingText, setThinkingText] = useState("");
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
     const [isRecording, setIsRecording] = useState(false);
+    const [model, setModel] = useState("google:gemini-3.0-pro");
 
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -418,7 +420,8 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                     projectId,
                     chatId,
                     content: messageContent,
-                    previousMessages: messages
+                    previousMessages: messages,
+                    model
                 })
             });
 
@@ -711,6 +714,34 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
         <div className="flex flex-col h-full bg-background relative w-full max-w-screen overflow-x-hidden">
 
 
+            <div className="flex items-center justify-between px-4 py-2 border-b bg-background/95 backdrop-blur z-10 sticky top-0">
+                <div className="text-sm font-medium flex items-center gap-2">
+                    <Bot className="h-4 w-4 text-primary" />
+                    Assistant
+                </div>
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="sm" className="gap-2 h-8 text-muted-foreground hover:text-foreground">
+                            {model === "openai:gpt-5" && "ChatGPT (GPT-5)"}
+                            {model === "google:gemini-1.5-pro" && "Gemini 3 Pro (High)"}
+                            {model === "anthropic:claude-3-5-sonnet" && "Anthropic (Claude 3.5)"}
+                            <ChevronDown className="h-3 w-3 opacity-50" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setModel("openai:gpt-5")}>
+                            ChatGPT (GPT-5)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setModel("google:gemini-1.5-pro")}>
+                            Gemini 3 Pro (High)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setModel("anthropic:claude-3-5-sonnet")}>
+                            Anthropic (Claude 3.5)
+                        </DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
+            </div>
+
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-6 w-full max-w-screen" ref={scrollRef}>
                 {messages.length === 0 && (
                     <div className="flex h-full items-center justify-center text-muted-foreground opacity-50 px-4 text-center flex-col gap-2">
@@ -966,7 +997,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             <div className="p-4 bg-background w-full max-w-screen flex justify-center pb-6">
                 <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all">
                     <textarea
-                        className="w-full bg-transparent border-none rounded-2xl pl-20 pr-12 py-3 md:py-4 text-sm md:text-base focus:outline-none resize-none min-h-[56px] max-h-[200px] overflow-y-auto"
+                        className="w-full bg-transparent border-none rounded-2xl pl-20 pr-32 py-3 md:py-4 text-sm md:text-base focus:outline-none resize-none min-h-[56px] max-h-[200px] overflow-y-auto"
                         placeholder="Send a message to the model..."
                         value={input}
                         onChange={(e) => {
@@ -1012,7 +1043,32 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                         </Button>
                     </div>
 
-                    <div className="absolute bottom-3 right-2">
+                    <div className="absolute bottom-3 right-2 flex items-center gap-2">
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground px-2">
+                                    {model === "openai:gpt-5.2" && "GPT-5.2"}
+                                    {model === "google:gemini-3.0-pro" && "Gemini 3"}
+                                    {model === "anthropic:claude-opus-4-6" && "Opus 4.6"}
+                                    {model === "anthropic:claude-sonnet-4-6" && "Sonnet 4.6"}
+                                    <ChevronDown className="h-3 w-3 opacity-50" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => setModel("google:gemini-3.0-pro")}>
+                                    Gemini 3 Pro
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setModel("openai:gpt-5.2")}>
+                                    GPT 5.2
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-opus-4-6")}>
+                                    Opus 4.6
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-sonnet-4-6")}>
+                                    Sonnet 4.6
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                         <Button
                             onClick={() => loading ? handleStop() : handleSend()}
                             disabled={!loading && !input.trim()}
