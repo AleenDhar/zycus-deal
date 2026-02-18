@@ -21,8 +21,8 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        const { projectId, chatId, content, previousMessages } = await req.json();
-        console.log(`[API] Received request for Chat: ${chatId}, Project: ${projectId}`);
+        const { projectId, chatId, content, previousMessages, model } = await req.json();
+        console.log(`[API] Received request for Chat: ${chatId}, Project: ${projectId}, Model: ${model}`);
 
         if (!projectId || !chatId || !content) {
             return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -80,7 +80,20 @@ export async function POST(req: NextRequest) {
             systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
         }
 
-        // 5. Build Payload
+        // 5. Get API Keys (if available)
+        const { data: apiKeysData } = await supabase
+            .from("app_config")
+            .select("key, value")
+            .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key"]);
+
+        const apiKeys: Record<string, string> = {};
+        if (apiKeysData) {
+            apiKeysData.forEach((row: any) => {
+                if (row.value) apiKeys[row.key] = row.value;
+            });
+        }
+
+        // 6. Build Payload
         const messagesPayload = previousMessages.map((m: any) => ({
             role: m.role,
             content: m.content
@@ -90,9 +103,10 @@ export async function POST(req: NextRequest) {
         const payload = {
             messages: messagesPayload,
             system_prompt: systemPrompt,
-            model: "openai:gpt-5", // User preference from chat.ts
+            model: model || "anthropic:claude-opus-4-6", // User preference from chat.ts
             stream: true,
             chat_id: chatId, // Pass chat_id so server can log directly to DB
+            api_keys: apiKeys
             // enable_research: true // Optional: could be passed from client if needed
         };
 

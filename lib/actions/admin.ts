@@ -105,3 +105,53 @@ export async function updateUserRole(userId: string, newRole: 'admin' | 'user') 
     revalidatePath("/admin");
     return { success: true };
 }
+
+// 4. API Key Management
+export async function getApiKeys() {
+    const isAdmin = await verifyAdmin();
+    // Allow reading keys if admin, otherwise empty
+    if (!isAdmin) return {};
+
+    const supabase = await createClient();
+    const { data } = await supabase
+        .from("app_config")
+        .select("key, value")
+        .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key"]);
+
+    // Transform into object
+    const keys: Record<string, string> = {};
+    data?.forEach((row: any) => {
+        keys[row.key] = row.value;
+    });
+
+    return keys;
+}
+
+export async function updateApiKey(key: string, value: string) {
+    const isAdmin = await verifyAdmin();
+    if (!isAdmin) {
+        return { success: false, error: "Unauthorized: Admins only." };
+    }
+
+    const allowedKeys = ["openai_api_key", "google_api_key", "anthropic_api_key"];
+    if (!allowedKeys.includes(key)) {
+        return { success: false, error: "Invalid API Key type." };
+    }
+
+    const supabase = await createClient();
+    const { error } = await supabase
+        .from("app_config")
+        .upsert({
+            key,
+            value,
+            updated_at: new Date().toISOString()
+        });
+
+    if (error) {
+        console.error("Error updating API key:", error);
+        return { success: false, error: error.message };
+    }
+
+    revalidatePath("/admin");
+    return { success: true };
+}
