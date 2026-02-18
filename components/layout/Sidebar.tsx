@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
     LayoutDashboard,
@@ -15,7 +15,8 @@ import {
     Plus,
     History,
     FileText,
-    Loader2
+    Loader2,
+    MessageSquarePlus
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -46,9 +47,11 @@ interface Project {
 
 export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMobileOpen }: SidebarProps) {
     const pathname = usePathname();
+    const router = useRouter();
     const supabase = createClient();
     const [recentProjects, setRecentProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
+    const [creatingChat, setCreatingChat] = useState(false);
 
     useEffect(() => {
         const fetchProjects = async () => {
@@ -123,7 +126,7 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                     </div>
 
                     {/* New Project Button */}
-                    <div className={cn("mb-6", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
+                    <div className={cn("mb-2", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
                         <Button
                             asChild
                             variant="glass"
@@ -136,6 +139,42 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                                 <Plus className={cn("h-4 w-4", !isCollapsed && "mr-1")} />
                                 {!isCollapsed && "New Project"}
                             </Link>
+                        </Button>
+                    </div>
+
+                    {/* New Chat Button */}
+                    <div className={cn("mb-6", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
+                        <Button
+                            variant="outline"
+                            disabled={creatingChat}
+                            className={cn(
+                                "w-full justify-start gap-2",
+                                isCollapsed && "w-10 h-10 p-0 justify-center"
+                            )}
+                            onClick={async () => {
+                                setCreatingChat(true);
+                                try {
+                                    const { createStandaloneChat } = await import("@/lib/actions/chat");
+                                    const result = await createStandaloneChat();
+                                    if (result.id) {
+                                        router.push(`/chat/${result.id}`);
+                                        setMobileOpen?.(false);
+                                    } else {
+                                        console.error("Failed to create chat:", result.error);
+                                    }
+                                } catch (err) {
+                                    console.error("Error creating standalone chat:", err);
+                                } finally {
+                                    setCreatingChat(false);
+                                }
+                            }}
+                        >
+                            {creatingChat ? (
+                                <Loader2 className={cn("h-4 w-4 animate-spin", !isCollapsed && "mr-1")} />
+                            ) : (
+                                <MessageSquarePlus className={cn("h-4 w-4", !isCollapsed && "mr-1")} />
+                            )}
+                            {!isCollapsed && (creatingChat ? "Creating..." : "New Chat")}
                         </Button>
                     </div>
 
