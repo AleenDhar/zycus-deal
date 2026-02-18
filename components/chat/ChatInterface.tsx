@@ -93,7 +93,7 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
     const [thinkingText, setThinkingText] = useState("");
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
     const [isRecording, setIsRecording] = useState(false);
-    const [model, setModel] = useState("google:gemini-3.0-pro");
+    const [model, setModel] = useState("anthropic:claude-opus-4-6");
 
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -1022,14 +1022,14 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                             <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground px-2">
                                     {model === "openai:gpt-5.2" && "GPT-5.2"}
-                                    {model === "google:gemini-3.0-pro" && "Gemini 3"}
+                                    {model === "google_genai:gemini-3.0-pro" && "Gemini 3"}
                                     {model === "anthropic:claude-opus-4-6" && "Opus 4.6"}
                                     {model === "anthropic:claude-sonnet-4-6" && "Sonnet 4.6"}
                                     <ChevronDown className="h-3 w-3 opacity-50" />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => setModel("google:gemini-3.0-pro")}>
+                                <DropdownMenuItem onClick={() => setModel("google_genai:gemini-3.0-pro")}>
                                     Gemini 3 Pro
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setModel("openai:gpt-5.2")}>
