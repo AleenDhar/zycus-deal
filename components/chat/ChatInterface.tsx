@@ -1022,15 +1022,19 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
                             <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground px-2">
                                     {model === "openai:gpt-5.2" && "GPT-5.2"}
-                                    {model === "google_genai:gemini-3.0-pro" && "Gemini 3"}
+                                    {model === "google_genai:gemini-3-pro-preview" && "Gemini 3 Pro"}
+                                    {model === "google_genai:gemini-3-flash-preview" && "Gemini 3 Flash"}
                                     {model === "anthropic:claude-opus-4-6" && "Opus 4.6"}
                                     {model === "anthropic:claude-sonnet-4-6" && "Sonnet 4.6"}
                                     <ChevronDown className="h-3 w-3 opacity-50" />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => setModel("google_genai:gemini-3.0-pro")}>
+                                <DropdownMenuItem onClick={() => setModel("google_genai:gemini-3-pro-preview")}>
                                     Gemini 3 Pro
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setModel("google_genai:gemini-3-flash-preview")}>
+                                    Gemini 3 Flash
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setModel("openai:gpt-5.2")}>
                                     GPT 5.2
