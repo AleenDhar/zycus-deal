@@ -14,6 +14,12 @@ import {
     type Phase,
     type PhaseMeta,
 } from "@/lib/phase-pipeline";
+import {
+    fetchChatCostSnapshot,
+    snapshotDelta,
+    ZERO_SNAPSHOT,
+    type ChatUsageSnapshot,
+} from "@/lib/automations/cost";
 
 interface RunOutcome {
     ok: boolean;
@@ -171,11 +177,25 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
     });
 
     // 6. Status already flipped to 'running' above; now just attach the chat
-    // link and the total phase count for progress display.
+    // link and the total phase count for progress display. Also clear any
+    // stale cost totals from a previous run so the UI doesn't show last
+    // run's number while the new run is still mid-flight.
     await markTask(supabase, taskId, {
         chat_id: chatId,
         last_phase_total: phases.length,
+        total_input_tokens: null,
+        total_output_tokens: null,
+        total_cost_usd: null,
     });
+
+    // Snapshot cumulative usage before phase 1 so per-phase deltas are
+    // accurate even if the chat already has some usage from a prior turn
+    // (currently impossible — automation chats are fresh — but cheap
+    // insurance, and keeps the diff math correct if that ever changes).
+    // Failures collapse to ZERO so we attribute everything that arrives
+    // after this point to the new pipeline run.
+    let prevCostSnapshot: ChatUsageSnapshot =
+        (await fetchChatCostSnapshot(agentApiUrl, chatId)) ?? ZERO_SNAPSHOT;
 
     // 7. Run the phase pipeline with progress callbacks.
     let lastPhase: PhaseMeta | undefined;
@@ -204,23 +224,55 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
             },
             onPhaseEnd: async (phase, accumulatedText) => {
                 lastPhase = phase;
-                // Append this phase's output to the task's phase_outputs
-                // array. Read-modify-write — fine since a single task only
-                // ever runs one pipeline at a time.
+
+                // Snapshot cumulative chat cost and compute this phase's
+                // delta. The agent persists usage asynchronously, so if the
+                // first snapshot looks identical to the previous one (zero
+                // delta) but the phase clearly did work, retry once after a
+                // short pause. After that, accept null — the next phase
+                // will absorb the late-arriving tokens into its delta.
+                let phaseSnap = await fetchChatCostSnapshot(agentApiUrl, chatId);
+                let phaseDelta = phaseSnap ? snapshotDelta(prevCostSnapshot, phaseSnap) : null;
+                const looksStale =
+                    phaseSnap !== null &&
+                    phaseDelta !== null &&
+                    phaseDelta.input_tokens === 0 &&
+                    phaseDelta.output_tokens === 0 &&
+                    (accumulatedText?.length ?? 0) > 0;
+                if (looksStale) {
+                    await new Promise(r => setTimeout(r, 750));
+                    const retry = await fetchChatCostSnapshot(agentApiUrl, chatId);
+                    if (retry) {
+                        phaseSnap = retry;
+                        phaseDelta = snapshotDelta(prevCostSnapshot, retry);
+                    }
+                }
+                if (phaseSnap) prevCostSnapshot = phaseSnap;
+
+                // Append this phase's output (with optional cost fields)
+                // to the task's phase_outputs array. Read-modify-write —
+                // fine since a single task only ever runs one pipeline at
+                // a time.
                 const { data: current } = await supabase
                     .from("automation_tasks")
                     .select("phase_outputs")
                     .eq("id", taskId)
                     .maybeSingle();
                 const prior = Array.isArray(current?.phase_outputs) ? current!.phase_outputs : [];
-                const nextOutputs = [...prior, {
+                const newEntry: Record<string, unknown> = {
                     phase_index: phase.index,
                     phase_position: phase.position,
                     phase_name: phase.name,
                     phase_model_id: phase.model_id,
                     content: accumulatedText,
                     completed_at: new Date().toISOString(),
-                }];
+                };
+                if (phaseDelta) {
+                    newEntry.input_tokens = phaseDelta.input_tokens;
+                    newEntry.output_tokens = phaseDelta.output_tokens;
+                    newEntry.cost_usd = phaseDelta.cost_usd;
+                }
+                const nextOutputs = [...prior, newEntry];
                 await markTask(supabase, taskId, {
                     last_phase_index: phase.index,
                     last_phase_total: phase.total,
@@ -242,18 +294,32 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
         }
     );
 
-    // 8. Finalize.
+    // 8. Finalize. Take one last cost snapshot so the row total reflects
+    // any tokens the agent persisted after the last onPhaseEnd. Even on
+    // stopped/failed runs we still record what was spent — partial runs
+    // still cost real money.
+    const finalSnap = await fetchChatCostSnapshot(agentApiUrl, chatId);
+    const totals = finalSnap
+        ? {
+              total_input_tokens: finalSnap.input_tokens,
+              total_output_tokens: finalSnap.output_tokens,
+              total_cost_usd: finalSnap.cost_usd,
+          }
+        : {};
+
     const finishedAt = new Date().toISOString();
     if (result.stopped) {
         await markTask(supabase, taskId, {
             status: "stopped",
             completed_at: finishedAt,
+            ...totals,
         });
     } else if (result.failed) {
         await markTask(supabase, taskId, {
             status: "failed",
             error: result.error || collectedError || "Pipeline failed",
             completed_at: finishedAt,
+            ...totals,
         });
     } else {
         await markTask(supabase, taskId, {
@@ -262,6 +328,7 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
             last_phase_index: lastPhase?.index ?? null,
             last_phase_total: lastPhase?.total ?? phases.length,
             last_phase_name: lastPhase?.name ?? null,
+            ...totals,
         });
     }
 

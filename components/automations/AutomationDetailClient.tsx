@@ -42,6 +42,22 @@ interface Props {
     canEdit: boolean;
 }
 
+// USD formatter — 4 fractional digits below $1 (most automation phases cost
+// pennies, so 2dp rounds to "$0.00") and 2 above. Matches how cost is shown
+// in other ops surfaces in this app.
+function formatCost(usd: number): string {
+    if (!Number.isFinite(usd) || usd <= 0) return "$0";
+    if (usd < 1) return `$${usd.toFixed(4)}`;
+    return `$${usd.toFixed(2)}`;
+}
+
+// Compact token count: 12,400 → "12.4k", under-1k stays exact.
+function formatTokens(n: number): string {
+    if (!Number.isFinite(n) || n <= 0) return "0";
+    if (n < 1000) return String(Math.round(n));
+    return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+}
+
 const STATUS_STYLES: Record<AutomationTaskStatus, string> = {
     pending: "bg-muted text-muted-foreground border-border",
     running: "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30",
@@ -517,6 +533,7 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                 <th className="px-3 py-2 text-left w-28">Status</th>
                                 <th className="px-3 py-2 text-left w-40">When</th>
                                 <th className="px-3 py-2 text-left w-20">Chat</th>
+                                <th className="px-3 py-2 text-right w-24">Cost</th>
                                 <th className="px-3 py-2 text-right w-32">Actions</th>
                             </tr>
                         </thead>
@@ -575,19 +592,45 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                                 isRunning && task.last_phase_index === phase.position;
                                             const live = isActivePhase ? (liveProgress[task.id] || []) : [];
 
+                                            // Per-phase cost subtitle. Show
+                                            // only when we actually captured a
+                                            // cost — pre-cost-feature runs
+                                            // have output but no cost_usd, and
+                                            // rendering "$0" in that case
+                                            // would be misleading.
+                                            const hasCost = output?.cost_usd != null;
+                                            const totalTokens =
+                                                (output?.input_tokens ?? 0) +
+                                                (output?.output_tokens ?? 0);
+
                                             return (
                                                 <td key={phase.id} className="px-3 py-2 align-top">
                                                     {output ? (
-                                                        <details className="group max-w-[280px]">
-                                                            <summary className="cursor-pointer text-xs text-foreground/90 leading-snug list-none">
-                                                                <span className="line-clamp-3 group-open:line-clamp-none whitespace-pre-wrap">
-                                                                    {output.content || <span className="text-muted-foreground/50 italic">(empty response)</span>}
-                                                                </span>
-                                                                {output.content && output.content.length > 140 && (
-                                                                    <span className="text-[10px] text-primary/70 group-open:hidden ml-1">…more</span>
-                                                                )}
-                                                            </summary>
-                                                        </details>
+                                                        <div className="space-y-1">
+                                                            <details className="group max-w-[280px]">
+                                                                <summary className="cursor-pointer text-xs text-foreground/90 leading-snug list-none">
+                                                                    <span className="line-clamp-3 group-open:line-clamp-none whitespace-pre-wrap">
+                                                                        {output.content || <span className="text-muted-foreground/50 italic">(empty response)</span>}
+                                                                    </span>
+                                                                    {output.content && output.content.length > 140 && (
+                                                                        <span className="text-[10px] text-primary/70 group-open:hidden ml-1">…more</span>
+                                                                    )}
+                                                                </summary>
+                                                            </details>
+                                                            {hasCost && (
+                                                                <div
+                                                                    className="text-[10px] font-mono text-muted-foreground/80"
+                                                                    title={`${output?.input_tokens ?? 0} in / ${output?.output_tokens ?? 0} out tokens`}
+                                                                >
+                                                                    {formatCost(output!.cost_usd!)}
+                                                                    {totalTokens > 0 && (
+                                                                        <span className="text-muted-foreground/50">
+                                                                            {" · "}{formatTokens(totalTokens)} tok
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     ) : isActivePhase ? (
                                                         <LivePhaseCell rows={live} />
                                                     ) : (
@@ -620,6 +663,33 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                                     <MessageSquare className="h-3 w-3" />
                                                     Open
                                                 </Link>
+                                            ) : (
+                                                <span className="text-xs text-muted-foreground/40">—</span>
+                                            )}
+                                        </td>
+                                        <td className="px-3 py-2 align-top text-right">
+                                            {task.total_cost_usd != null ? (
+                                                <div
+                                                    className="text-xs font-mono text-foreground/80"
+                                                    title={
+                                                        task.total_input_tokens != null
+                                                            ? `${task.total_input_tokens} in / ${task.total_output_tokens ?? 0} out tokens`
+                                                            : undefined
+                                                    }
+                                                >
+                                                    {formatCost(task.total_cost_usd)}
+                                                    {(task.total_input_tokens ?? 0) +
+                                                        (task.total_output_tokens ?? 0) >
+                                                        0 && (
+                                                        <div className="text-[10px] text-muted-foreground/60">
+                                                            {formatTokens(
+                                                                (task.total_input_tokens ?? 0) +
+                                                                    (task.total_output_tokens ?? 0)
+                                                            )}{" "}
+                                                            tok
+                                                        </div>
+                                                    )}
+                                                </div>
                                             ) : (
                                                 <span className="text-xs text-muted-foreground/40">—</span>
                                             )}

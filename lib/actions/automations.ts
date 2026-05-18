@@ -28,6 +28,11 @@ export interface AutomationPhaseOutput {
     phase_model_id: string | null;
     content: string;
     completed_at: string;
+    // Optional — populated by runs that happen after the cost-capture work
+    // shipped. Older rows leave these unset and the UI renders nothing.
+    input_tokens?: number;
+    output_tokens?: number;
+    cost_usd?: number;
 }
 
 export interface AutomationTask {
@@ -47,6 +52,11 @@ export interface AutomationTask {
     error: string | null;
     stop_requested: boolean;
     phase_outputs: AutomationPhaseOutput[];
+    // Cumulative usage across all phases of the last completed run.
+    // Null on rows that ran before cost capture shipped, or while running.
+    total_input_tokens: number | null;
+    total_output_tokens: number | null;
+    total_cost_usd: number | null;
     created_at: string;
     updated_at: string;
 }
